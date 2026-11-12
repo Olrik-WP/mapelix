@@ -23,7 +23,9 @@ export function legacyBiomeStyle(biomeId: number): BiomeStyle {
   const cached = RESOLVED_STYLES.get(baseId);
   if (cached !== undefined) return cached;
   const selected = CLASSIC_STYLES.get(baseId) ?? BIOME_STYLES.get(baseId) ?? DEFAULT_STYLE;
-  const resolved = { ...selected, water: classicWaterColor(baseId), waterOpacity: 1 };
+  // New client-biome definitions provide explicit water colors, outside the classic families.
+  const water = baseId === 194 || baseId === 195 ? selected.water : classicWaterColor(baseId);
+  const resolved = { ...selected, water, waterOpacity: 1 };
   RESOLVED_STYLES.set(baseId, resolved);
   return resolved;
 }
@@ -135,6 +137,9 @@ const BIOME_STYLES = new Map<number, BiomeStyle>([
   [190, style("#91bd59", "#77ab2f", "#44aff5", 1)],
   [191, style("#6a7039", "#8db127", "#3a7a6a", 1)],
   [192, style("#b6db61", "#b6db61", "#5db7ef", 1)],
+  // Explicit grass/foliage/water from Bedrock samples 1.26.60.5 client biomes.
+  [194, style("#aba64f", "#71a74d", "#34bf89", 1)],
+  [195, style("#df6827", "#e68e30", "#375154", 1)],
 ]);
 
 function style(grass: string, foliage: string, water: string, waterOpacity: number): BiomeStyle {

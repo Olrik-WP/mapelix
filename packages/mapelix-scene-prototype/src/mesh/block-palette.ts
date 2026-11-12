@@ -1,5 +1,6 @@
 import type { LittleEndianNbtCompoundValue } from "@mapelix/prototype/bedrock";
 
+import { BEDROCK_COLOR_STATES } from "../blocks/bedrock-colors.js";
 import {
   resolveBlockAppearance,
   type BiomeTint,
@@ -243,7 +244,10 @@ function faceAxis(face: number): "x" | "y" | "z" {
 function appearanceKey(name: string, states: LittleEndianNbtCompoundValue | undefined): string {
   if (states === undefined) return name;
   let key = name;
-  for (const state of APPEARANCE_STATES) {
+  const colorStates = BEDROCK_COLOR_STATES[name.replace(/^minecraft:/, "")];
+  const appearanceStates =
+    colorStates === undefined ? APPEARANCE_STATES : [...APPEARANCE_STATES, ...colorStates];
+  for (const state of appearanceStates) {
     const value = states[state];
     if (typeof value === "string" || typeof value === "number") key += `|${state}=${value}`;
   }

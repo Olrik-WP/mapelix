@@ -2,6 +2,7 @@ import { defaultBlockStyle } from "@mapelix/prototype";
 import type { LittleEndianNbtCompoundValue } from "@mapelix/prototype/bedrock";
 
 import { FULL_BOX, PlantSprite, QuadMaterial, type QuadBox } from "../format.js";
+import { BEDROCK_BLOCK_COLORS, type SampledBlockColors } from "./bedrock-colors.js";
 
 /** How a block occupies its cell. Only cubes hide their neighbors and block the sky. */
 export type BlockShape =
@@ -239,6 +240,15 @@ export function resolveBlockAppearance(
   const styled = rgb(style.red, style.green, style.blue);
 
   if (shape.kind === "water") return uniform(shape, rgb(38, 92, 200), "water");
+  const sampled =
+    !name.includes(":") || name.startsWith("minecraft:") ? BEDROCK_BLOCK_COLORS[block] : undefined;
+  // These broad legacy rules lose ore hosts, copper oxidation, and lava/magma contrast.
+  if (
+    sampled !== undefined &&
+    /(?:^|_)ore$|copper|^(?:lava|flowing_lava|magma|brown_mushroom|red_mushroom)$/.test(block)
+  ) {
+    return sampledAppearance(shape, sampled, states);
+  }
   if (shape.kind === "plant") return plantAppearance(shape, block);
 
   const wood = woodColors(block);
@@ -269,7 +279,26 @@ export function resolveBlockAppearance(
     const covered = side === DIRT && top !== DIRT && block !== "farmland";
     return { ...uniform(shape, side ?? top), top, bottom: side ?? top, coveredSides: covered };
   }
+  // Keep validated fixed foliage colors; untinted leaf textures are not biome colors.
+  if (
+    sampled !== undefined &&
+    !(shape.kind === "cube" && shape.material === QuadMaterial.Foliage)
+  ) {
+    return sampledAppearance(shape, sampled, states);
+  }
   return uniform(shape, styled);
+}
+
+function sampledAppearance(
+  shape: BlockShape,
+  sampled: SampledBlockColors,
+  states: LittleEndianNbtCompoundValue,
+): BlockAppearance {
+  const variant = sampled.variants?.find((candidate) =>
+    Object.entries(candidate.states).every(([key, value]) => states[key] === value),
+  );
+  const [top, side, bottom] = variant?.colors ?? sampled.colors;
+  return { ...uniform(shape, side), top, bottom, axis: pillarAxis(states) };
 }
 
 const FOLIAGE_TINTED =
@@ -381,6 +410,7 @@ function canonicalName(block: string, states: LittleEndianNbtCompoundValue): str
   if (leafType !== undefined && (block === "leaves" || block === "leaves2"))
     return `${leafType}_leaves`;
   const woodType = state("wood_type");
+  if (block === "fence_gate") return `${woodType ?? "oak"}_fence_gate`;
   const woodSuffix = LEGACY_WOOD_SUFFIXES[block];
   if (woodType !== undefined && woodSuffix !== undefined) return `${woodType}_${woodSuffix}`;
   const plantType = state("double_plant_type");

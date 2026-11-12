@@ -57,4 +57,23 @@ describe("legacyBiomeStyle", () => {
       water: { red: 25, green: 107, blue: 229 },
     });
   });
+
+  it("uses explicit dappled-forest grass, foliage and water from the client biome", () => {
+    expect(canonicalBiomeId(195)).toBe(195);
+    expect(legacyBiomeStyle(195)).toMatchObject({
+      groundGrass: { red: 195, green: 91, blue: 34 },
+      grass: { red: 195, green: 91, blue: 34 },
+      foliage: { red: 129, green: 80, blue: 27 },
+      water: { red: 55, green: 81, blue: 84 },
+    });
+  });
+
+  it("uses sulfur-cave grass and water without inventing an unspecified foliage override", () => {
+    expect(canonicalBiomeId(194)).toBe(194);
+    expect(legacyBiomeStyle(194)).toMatchObject({
+      grass: { red: 150, green: 145, blue: 69 },
+      foliage: { red: 63, green: 94, blue: 43 },
+      water: { red: 52, green: 191, blue: 137 },
+    });
+  });
 });
