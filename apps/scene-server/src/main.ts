@@ -1,4 +1,4 @@
-import { chmod, lstat, readFile, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ const startedAt = Date.now();
 
 async function main(): Promise<void> {
   const config = readConfig(process.env);
+  await requireWorld(config.worldDirectory);
   const engine = await engineFingerprint();
   const revision = await worldRevision(config.worldDirectory, engine);
   log("info", "server.starting", {
@@ -105,6 +106,17 @@ async function main(): Promise<void> {
   };
   process.on("SIGTERM", () => stop("SIGTERM"));
   process.on("SIGINT", () => stop("SIGINT"));
+}
+
+/** A missing or partial snapshot is a configuration error: restarting cannot fix it. */
+async function requireWorld(directory: string): Promise<void> {
+  const [level, database] = await Promise.all([
+    stat(join(directory, "level.dat")).catch(() => undefined),
+    stat(join(directory, "db")).catch(() => undefined),
+  ]);
+  if (level?.isFile() !== true || database?.isDirectory() !== true) {
+    throw new ConfigError("MAPELIX_WORLD_DIRECTORY holds no Bedrock world (level.dat and db/)");
+  }
 }
 
 /** Uses MAPELIX_BOUNDS, the extent saved for this revision, or a fresh key scan. */

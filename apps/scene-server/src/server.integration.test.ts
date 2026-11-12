@@ -163,6 +163,19 @@ describe("scene server process", () => {
     expect((await readdir(cache)).length).toBe(1);
   }, 60_000);
 
+  it("treats a missing world as a configuration error", async () => {
+    const child = spawn(process.execPath, [main], {
+      env: {
+        ...process.env,
+        MAPELIX_WORLD_DIRECTORY: join(work, "missing-world"),
+        MAPELIX_CACHE_DIRECTORY: join(work, "cache3"),
+      },
+      stdio: "ignore",
+    });
+    const code = await new Promise<number | null>((resolve) => child.on("exit", resolve));
+    expect(code).toBe(78);
+  }, 20_000);
+
   it("refuses to start with an unsafe configuration", async () => {
     const child = spawn(process.execPath, [main], {
       env: {
