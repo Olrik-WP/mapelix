@@ -75,7 +75,7 @@ who can reach it; execute bits are refused.
 
 The engine opens one world and one set of builder threads per dimension. Visiting all three would
 keep three sets. The server shares one budget of `MAPELIX_SCENE_WORKERS` builds across them, and
-closes a dimension's threads after `MAPELIX_POOL_IDLE_SECONDS` without a build; the next request
+closes a dimension's threads after `MAPELIX_POOL_IDLE_SECONDS` without a build, or 5 seconds after another dimension opens; the next request
 reopens them.
 
 ## Lifecycle

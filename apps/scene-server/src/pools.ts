@@ -10,6 +10,9 @@ export interface DimensionPoolsOptions {
   readonly onEvent?: (event: string, detail: Record<string, unknown>) => void;
 }
 
+/** An idle dimension closes this soon once another dimension opens. */
+const SWITCH_IDLE_MILLISECONDS = 5_000;
+
 interface Pool {
   readonly world: Promise<SceneWorld>;
   active: number;
@@ -20,7 +23,8 @@ interface Pool {
  * The engine fixes one dimension per world and worker pool. Visiting the Overworld,
  * the Nether and the End would therefore keep three sets of builder threads. This
  * shares one build budget between them and closes a dimension's threads once it has
- * been idle for a while, so memory stays close to that of a single dimension.
+ * been idle for a while, or a few seconds after another dimension opens, so memory
+ * stays close to that of a single dimension. A dimension in use is never closed.
  */
 export class DimensionPools {
   private readonly options: DimensionPoolsOptions;
@@ -79,6 +83,10 @@ export class DimensionPools {
       const world = this.options.open(dimension);
       const opened: Pool = { world, active: 0, idleTimer: undefined };
       pool = opened;
+      // Another dimension's idle threads go soon, unless it is used again meanwhile.
+      for (const [other, idle] of this.pools) {
+        if (idle.active === 0) this.scheduleClose(other, idle, SWITCH_IDLE_MILLISECONDS);
+      }
       this.pools.set(dimension, opened);
       world.catch(() => {
         if (this.pools.get(dimension) === opened) this.pools.delete(dimension);
@@ -88,9 +96,11 @@ export class DimensionPools {
     return pool;
   }
 
-  private scheduleClose(dimension: Dimension, pool: Pool): void {
-    const delay = this.options.idleMilliseconds;
-    if (delay <= 0 || this.closed) return;
+  private scheduleClose(dimension: Dimension, pool: Pool, sooner?: number): void {
+    const idle = this.options.idleMilliseconds;
+    if (idle <= 0 || this.closed) return;
+    const delay = sooner === undefined ? idle : Math.min(idle, sooner);
+    if (pool.idleTimer !== undefined) clearTimeout(pool.idleTimer);
     pool.idleTimer = setTimeout(() => {
       if (pool.active !== 0 || this.pools.get(dimension) !== pool) return;
       this.pools.delete(dimension);

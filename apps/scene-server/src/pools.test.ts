@@ -67,6 +67,36 @@ describe("DimensionPools", () => {
     await pools.close();
   });
 
+  it("closes an idle dimension a few seconds after another one opens", async () => {
+    vi.useFakeTimers();
+    try {
+      const worlds = fakeWorlds();
+      const pools = new DimensionPools({
+        open: worlds.open,
+        permits: 2,
+        idleMilliseconds: 300_000,
+      });
+      const overworld = pools.build("overworld", { level: 0, x: 0, z: 0 }, signal());
+      await vi.advanceTimersByTimeAsync(0);
+      worlds.opened[0]!.builds[0]!.finish();
+      await overworld;
+      const nether = pools.build("nether", { level: 0, x: 0, z: 0 }, signal());
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(worlds.opened[0]!.closed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(worlds.opened[0]!.closed).toBe(true);
+      expect(pools.openDimensions).toEqual(["nether"]);
+      // The dimension still building is never closed.
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(worlds.opened[1]!.closed).toBe(false);
+      worlds.opened[1]!.builds[0]!.finish();
+      await nether;
+      await pools.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("closes an idle dimension and reopens it on demand", async () => {
     vi.useFakeTimers();
     try {
