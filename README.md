@@ -31,7 +31,7 @@ current Amelix SMP backup.
 
 ## What (probably) doesn't work
 
-- Other dimensions, didn't even bother to try yet
+- Dimensions other than Overworld in the 2D prototype remain unvalidated.
 
 ## Similarity to uNmINeD
 
@@ -136,6 +136,10 @@ pnpm --filter @mapelix/prototype-viewer-3d dev
 See [`apps/prototype-viewer-3d`](apps/prototype-viewer-3d/README.md) for its settings and controls,
 and [`packages/mapelix-scene-prototype`](packages/mapelix-scene-prototype/README.md) for the
 region builder.
+
+The 3D engine now supports Overworld, Nether and End profiles, dimension selection, and a
+Nether roof cut that preserves interior geometry through every LOD. See the
+[native-dimension milestone](docs/native-dimensions.md) for validation and integration details.
 
 ## More information
 

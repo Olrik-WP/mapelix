@@ -1,4 +1,5 @@
 import { Color, MathUtils, Vector3, type Node } from "three/webgpu";
+import { DIMENSIONS, type Dimension } from "@mapelix/scene-prototype/dimensions";
 import {
   Fn,
   cameraPosition,
@@ -111,6 +112,13 @@ export interface Daylight {
  * same uniforms, so distant terrain melts into the horizon behind it.
  */
 export class Atmosphere {
+  private dimension: Dimension = "overworld";
+  readonly environment = uniform(0);
+
+  setDimension(dimension: Dimension): void {
+    this.dimension = dimension;
+    this.environment.value = DIMENSIONS[dimension].storageId;
+  }
   readonly sunDirection = uniform(new Vector3(0.4, 0.7, 0.3));
   readonly sunColor = uniform(new Color(0xfff1dc));
   readonly zenith = uniform(new Color(0x3d7ad8));
@@ -146,7 +154,7 @@ export class Atmosphere {
     const toMoon = max(dot(direction, this.sunDirection.negate()), 0);
     const moon = smoothstep(0.99965, 0.9998, toMoon).mul(2.2).add(toMoon.pow(40).mul(0.12));
     const nightSky = vec3(0.85, 0.9, 1).mul(stars.add(moon)).mul(night);
-    return base.add(glow).add(disc).add(nightSky);
+    return select(this.environment.equal(0), base.add(glow).add(disc).add(nightSky), base);
   });
 
   /** Haze color along a view direction, flattened toward the horizon and without the disc. */
@@ -174,9 +182,8 @@ export class Atmosphere {
       exp(cameraHeight.negate()),
       exp(cameraHeight.negate()).sub(exp(pointHeight.negate())).div(rise),
     );
-    const haze = float(1).sub(
-      exp(distance.mul(meanDensity).mul(2.1).div(this.hazeDistance).negate()),
-    );
+    const density = select(this.environment.equal(0), meanDensity, float(1));
+    const haze = float(1).sub(exp(distance.mul(density).mul(2.1).div(this.hazeDistance).negate()));
     const edgeStart = this.viewDistance.mul(0.7);
     const edge = smoothstep(edgeStart, this.viewDistance.mul(0.97), distance).mul(this.edgeFade);
     const direction = normalize(positionWorld.sub(cameraPosition));
@@ -188,6 +195,22 @@ export class Atmosphere {
    * sets in the west, and leans south (+z) so shadows fall toward the north.
    */
   setTimeOfDay(hour: number): Daylight {
+    if (this.dimension !== "overworld") {
+      const config = DIMENSIONS[this.dimension].atmosphere;
+      this.daylight.value = 0.35;
+      this.sunColor.value.set(0);
+      this.zenith.value.set(config.zenith);
+      this.horizon.value.set(config.horizon);
+      return {
+        direction: new Vector3(0.4, 0.7, 0.3).normalize(),
+        sunColor: new Color(config.light),
+        sunIntensity: this.dimension === "nether" ? 0.35 : 0.8,
+        skyColor: new Color(config.light),
+        groundColor: new Color(config.ground),
+        ambientIntensity: config.ambient,
+        daylight: 0.35,
+      };
+    }
     const angle = ((hour - 6) / 12) * Math.PI;
     const elevation = Math.sin(angle) * 64;
     const radians = MathUtils.degToRad(elevation);

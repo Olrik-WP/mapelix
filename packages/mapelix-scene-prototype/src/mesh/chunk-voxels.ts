@@ -1,4 +1,4 @@
-import { Face, WORLD_MAX_Y, WORLD_MIN_Y } from "../format.js";
+import { Face, WORLD_MIN_Y } from "../format.js";
 import { decodeSection, type ChunkSource } from "../world/chunk-source.js";
 import { biomeTints } from "./biome-tints.js";
 import {
@@ -45,6 +45,9 @@ interface StoredSection {
 
 /** Reads chunks into voxels, decoding subchunks from the top down only as deep as needed. */
 export class ChunkVoxelReader {
+  get geometry() {
+    return this.chunks.config.geometry;
+  }
   private readonly chunks: ChunkSource;
   private readonly palette: BlockPalette;
   /** Boxes that live only until they are halved, reused to spare the garbage collector. */
@@ -60,7 +63,12 @@ export class ChunkVoxelReader {
   }
 
   /** Reads a chunk as voxels `voxelSize` blocks wide, a power of two up to 16. */
-  read(chunkX: number, chunkZ: number, voxelSize: number): ChunkVoxels | undefined {
+  read(
+    chunkX: number,
+    chunkZ: number,
+    voxelSize: number,
+    ceilingY = this.chunks.config.maxY,
+  ): ChunkVoxels | undefined {
     const records = this.chunks.records(chunkX, chunkZ);
     if (records === undefined) return undefined;
 
@@ -70,8 +78,13 @@ export class ChunkVoxelReader {
     const depth = voxelSize >= COARSE_VOXEL ? COARSE_DEPTH : COVER_DEPTH;
     let open = 256;
     for (const record of records.sections) {
+      if (record.y * 16 >= ceilingY) continue;
       const section = decodeSection(record);
-      if (section === undefined || section.y < WORLD_MIN_Y / 16 || section.y >= WORLD_MAX_Y / 16) {
+      if (
+        section === undefined ||
+        section.y < this.chunks.config.minY / 16 ||
+        section.y >= ceilingY / 16
+      ) {
         continue;
       }
       const cells = sectionCells(section, this.palette);
@@ -79,7 +92,12 @@ export class ChunkVoxelReader {
       if (top === -1) continue;
       sections.push({ y: section.y, cells, top });
       open -= this.findGround(cells, section.y * 16, ground);
-      if (open === 0 && section.y * 16 <= Math.min(...ground) - depth - 1) break;
+      if (
+        this.chunks.config.geometry === "surface" &&
+        open === 0 &&
+        section.y * 16 <= Math.min(...ground) - depth - 1
+      )
+        break;
     }
     if (sections.length === 0) return undefined;
 

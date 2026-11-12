@@ -11,15 +11,10 @@ import {
 } from "@mapelix/prototype/bedrock";
 
 import type { LiveRecord, WorldDatabase } from "../leveldb/world-database.js";
+import { DIMENSIONS, parseDimension, type Dimension, type DimensionConfig } from "../dimensions.js";
 import { Data3DBiomes } from "./data-3d-biomes.js";
 
-export type Dimension = "overworld" | "nether" | "the-end";
-
-const DIMENSION_IDS: Readonly<Record<Dimension, number>> = {
-  overworld: 0,
-  nether: 1,
-  "the-end": 2,
-};
+export type { Dimension } from "../dimensions.js";
 
 /** Stored records for one chunk column, before any subchunk is decoded. */
 export interface ChunkRecords {
@@ -66,14 +61,20 @@ export class ChunkBiomes {
 
 /** Loads chunk columns from a seekable world database, with a small decoded-chunk cache. */
 export class ChunkSource {
-  private readonly database: WorldDatabase;
+  readonly config: DimensionConfig;
+  private readonly database: Pick<WorldDatabase, "readPrefix">;
   private readonly dimension: number;
   private readonly decoded = new Map<string, DecodedChunk | undefined>();
   private readonly maxDecodedChunks: number;
 
-  constructor(database: WorldDatabase, dimension: Dimension, maxDecodedChunks = 128) {
+  constructor(
+    database: Pick<WorldDatabase, "readPrefix">,
+    dimension: Dimension,
+    maxDecodedChunks = 128,
+  ) {
     this.database = database;
-    this.dimension = DIMENSION_IDS[dimension];
+    this.config = DIMENSIONS[parseDimension(dimension)];
+    this.dimension = this.config.storageId;
     this.maxDecodedChunks = maxDecodedChunks;
   }
 
@@ -85,8 +86,12 @@ export class ChunkSource {
     for (const record of this.database.readPrefix(this.prefix(chunkX, chunkZ))) {
       const key = classifyMapRecordKey(record.key);
       if (key === undefined || key.dimension !== this.dimension) continue;
-      if (key.tag === SUBCHUNK_TAG) sections.push({ y: key.y, record });
-      else if (key.tag === DATA_3D_TAG) data3D = new Data3DBiomes(record.value);
+      if (key.tag === SUBCHUNK_TAG) {
+        if (key.y >= this.config.minY / 16 && key.y < this.config.maxY / 16) {
+          sections.push({ y: key.y, record });
+        }
+      } else if (key.tag === DATA_3D_TAG)
+        data3D = new Data3DBiomes(record.value, this.config.minY, this.config.maxY);
       else if (key.tag === DATA_2D_TAG) data2D = decodeData2D(record.key, record.value);
     }
     if (sections.length === 0) return undefined;
@@ -115,7 +120,12 @@ export class ChunkSource {
             biomes: records.biomes,
             sections: records.sections
               .map((section) => decodeSection(section))
-              .filter((section) => section !== undefined)
+              .filter(
+                (section): section is DecodedSubchunk =>
+                  section !== undefined &&
+                  section.y >= this.config.minY / 16 &&
+                  section.y < this.config.maxY / 16,
+              )
               .sort((left, right) => left.y - right.y),
           };
     this.decoded.set(id, chunk);

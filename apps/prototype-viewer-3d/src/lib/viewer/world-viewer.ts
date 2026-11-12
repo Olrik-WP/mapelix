@@ -17,9 +17,10 @@ import { normalWorldGeometry, pass } from "three/tsl";
 import { Atmosphere } from "./atmosphere";
 import { CameraRig, ZOOM_LIMIT, pointerRay, type CameraView } from "./camera-rig";
 import { RegionStreamer, type StreamingStats } from "./region-streamer";
-import { createSceneMaterials } from "./shaders/materials";
+import { createSceneMaterials, type SceneMaterials } from "./shaders/materials";
+import { DIMENSIONS, type SceneContext } from "@mapelix/scene-prototype/dimensions";
 
-export interface WorldInfo {
+export interface WorldInfo extends SceneContext {
   readonly name: string;
   readonly spawn: { readonly x: number; readonly y: number; readonly z: number };
   readonly revision: string;
@@ -70,7 +71,12 @@ export class WorldViewer {
   private readonly atmosphere = new Atmosphere();
   private readonly sun = new DirectionalLight(0xffffff, 3);
   private readonly sky = new HemisphereLight(0xb9d3ec, 0x8a7a62, 1.4);
-  private readonly streamer: RegionStreamer;
+  private streamer: RegionStreamer;
+  private readonly materials: SceneMaterials;
+  /** Kept so a replacement streamer reaches the same region server. */
+  private readonly options: WorldViewerOptions;
+  private context: SceneContext;
+  private hour = 15.5;
   private readonly rig: CameraRig;
   private readonly timer = new Timer();
   private readonly resizeObserver: ResizeObserver;
@@ -91,24 +97,14 @@ export class WorldViewer {
     options: WorldViewerOptions,
   ) {
     this.container = container;
+    this.context = world;
+    this.atmosphere.setDimension(world.dimension);
     this.renderer = renderer;
     container.append(renderer.domElement);
 
-    const materials = createSceneMaterials(this.atmosphere);
-    this.streamer = new RegionStreamer({
-      revision: world.revision,
-      ...(options.regionBase === undefined ? {} : { regionBase: options.regionBase }),
-      ...(options.regionSuffix === undefined ? {} : { regionSuffix: options.regionSuffix }),
-      materials,
-      voxelPixels: 2.2,
-      blockPixels: 4.4,
-      viewDistance: this.atmosphere.viewDistance.value,
-      maxRequests: 10,
-      memoryBudget: 1024 * 1024 * 1024,
-      onRegion: () => {
-        this.regionsChanged = true;
-      },
-    });
+    this.options = options;
+    this.materials = createSceneMaterials(this.atmosphere);
+    this.streamer = this.createStreamer(world);
     this.scene.add(this.streamer.root, this.sky, this.sun, this.sun.target);
     this.scene.backgroundNode = this.atmosphere.sky(normalWorldGeometry);
     this.scene.fogNode = this.atmosphere.fogNode;
@@ -117,13 +113,17 @@ export class WorldViewer {
     this.sun.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
     this.sun.shadow.autoUpdate = false;
 
-    this.rig = new CameraRig(this.camera, renderer.domElement, this.streamer);
+    this.rig = new CameraRig(this.camera, renderer.domElement, {
+      heightAt: (x, z) => this.streamer.heightAt(x, z),
+      raycast: (origin, direction, far, radius) =>
+        this.streamer.raycast(origin, direction, far, radius),
+    });
     this.rig.setView(
       {
         x: world.spawn.x,
         y: world.spawn.y,
         z: world.spawn.z,
-        distance: 160,
+        distance: world.dimension === "nether" ? 80 : 160,
         heading: MathUtils.degToRad(35),
         pitch: MathUtils.degToRad(42),
         ...start,
@@ -187,6 +187,7 @@ export class WorldViewer {
 
   /** Hour of the day from 0 to 24. Noon is 12. */
   setTimeOfDay(hour: number): void {
+    this.hour = hour;
     const daylight = this.atmosphere.setTimeOfDay(hour);
     this.sun.color.copy(daylight.sunColor);
     this.sun.intensity = daylight.sunIntensity;
@@ -196,6 +197,47 @@ export class WorldViewer {
     this.sunDirection.copy(daylight.direction);
     this.glow.strength.value = MathUtils.lerp(0.9, 0.45, daylight.daylight);
     this.shadowKey = "";
+  }
+
+  /** Replaces all terrain together while retaining the renderer, materials and controls. */
+  setWorld(world: WorldInfo, keepView = false): void {
+    const previous = this.snapshot().view;
+    this.scene.remove(this.streamer.root);
+    this.streamer.dispose();
+    this.context = world;
+    this.streamer = this.createStreamer(world);
+    this.scene.add(this.streamer.root);
+    this.atmosphere.setDimension(world.dimension);
+    this.setTimeOfDay(this.hour);
+    this.rig.setView(
+      {
+        ...previous,
+        ...(keepView ? {} : { ...world.spawn, distance: world.dimension === "nether" ? 80 : 160 }),
+      },
+      { settle: true },
+    );
+    this.regionsChanged = true;
+    this.fitViewDistance();
+  }
+
+  private createStreamer(world: WorldInfo): RegionStreamer {
+    return new RegionStreamer({
+      context: world,
+      revision: world.revision,
+      ...(this.options.regionBase === undefined ? {} : { regionBase: this.options.regionBase }),
+      ...(this.options.regionSuffix === undefined
+        ? {}
+        : { regionSuffix: this.options.regionSuffix }),
+      materials: this.materials,
+      voxelPixels: 2.2,
+      blockPixels: 4.4,
+      viewDistance: this.atmosphere.viewDistance.value,
+      maxRequests: 10,
+      memoryBudget: 1024 * 1024 * 1024,
+      onRegion: () => {
+        this.regionsChanged = true;
+      },
+    });
   }
 
   /** Fades terrain into the sky before the edge of the loaded area, or lets the edge show. */
@@ -247,6 +289,12 @@ export class WorldViewer {
     this.rig.dispose();
     this.streamer.dispose();
     this.pipeline.dispose();
+    for (const pair of Object.values(this.materials)) {
+      pair.steady.dispose();
+      pair.fading.dispose();
+    }
+    this.sun.shadow.dispose();
+    this.timer.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
@@ -276,7 +324,10 @@ export class WorldViewer {
     const reach = this.renderDistance ?? distance;
     this.streamer.setViewDistance(reach);
     this.atmosphere.viewDistance.value = reach;
-    this.atmosphere.hazeDistance.value = distance;
+    this.atmosphere.hazeDistance.value =
+      this.context.dimension === "overworld"
+        ? distance
+        : DIMENSIONS[this.context.dimension].atmosphere.hazeDistance;
     // Far from the world, a farther near plane keeps the depth buffer precise.
     this.camera.near = MathUtils.clamp(zoom / 400, 1, 50);
     // Regions start within reach, and their far corners can lie a few thousand blocks beyond.

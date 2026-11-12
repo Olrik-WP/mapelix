@@ -14,6 +14,7 @@ import {
   type SceneRegion,
 } from "../format.js";
 import { blendColumnTints } from "./biome-tints.js";
+import type { GeometryMode } from "../dimensions.js";
 import { BlockPalette, PALETTE_ID_MASK, Shape, TintCode, WATERLOGGED } from "./block-palette.js";
 import {
   NO_BLOCK,
@@ -50,19 +51,21 @@ const NEIGHBOR_COLUMNS = [1, -1, VOLUME_SIZE, -VOLUME_SIZE];
 const WATER_SURFACE_SIZE = 14;
 
 /**
- * Turns a level 0 volume into packed quads. Only faces that touch air reachable
- * from the sky are kept, so cave walls and sealed interiors cost nothing.
+ * Turns a level 0 volume into packed quads. Surface mode culls sealed interiors;
+ * dimension modes keep internal faces for enclosed Nether caves and End islands.
  */
 export function meshRegionVolume(
   volume: RegionVolume,
   palette: BlockPalette,
   regionX: number,
   regionZ: number,
+  geometry: GeometryMode = "surface",
 ): SceneRegion {
-  return new VoxelMesher(volume, palette).mesh(regionX, regionZ);
+  return new VoxelMesher(volume, palette, geometry).mesh(regionX, regionZ);
 }
 
 class VoxelMesher {
+  private readonly geometry: GeometryMode;
   private readonly volume: RegionVolume;
   private readonly palette: BlockPalette;
   private readonly cells: Uint16Array;
@@ -81,7 +84,8 @@ class VoxelMesher {
   private minY = WORLD_MAX_Y;
   private maxY = WORLD_MIN_Y;
 
-  constructor(volume: RegionVolume, palette: BlockPalette) {
+  constructor(volume: RegionVolume, palette: BlockPalette, geometry: GeometryMode) {
+    this.geometry = geometry;
     this.volume = volume;
     this.palette = palette;
     this.cells = volume.cells;
@@ -105,8 +109,8 @@ class VoxelMesher {
       x: regionX,
       z: regionZ,
       heights: this.heights(),
-      minY: Math.min(this.minY, this.maxY),
-      maxY: this.maxY,
+      minY: this.minY === WORLD_MAX_Y ? 0 : this.minY,
+      maxY: this.minY === WORLD_MAX_Y ? 0 : this.maxY,
       opaque: this.opaque.finish(),
       plants: this.plants.finish(),
       translucent: this.translucent.finish(),
@@ -115,6 +119,11 @@ class VoxelMesher {
 
   /** Finds the air under overhangs, eaves, canopies, and platforms that the open sky reaches. */
   private findOpenAir(): void {
+    if (this.geometry !== "surface") {
+      // Nether and End start at y=0. Their complete volumes keep every internal face.
+      this.lowestOpen = new Int16Array(VOLUME_LAYER).fill(1 - WORLD_MIN_Y);
+      return;
+    }
     const open = findOpenAir(
       {
         size: VOLUME_SIZE,
@@ -311,6 +320,10 @@ class VoxelMesher {
           const word2 = packQuadWord2(this.colorOf(id, Face.PositiveY, column), FULLY_LIT);
           this.plants.push(packQuadWord0(x, y, z, Face.CrossA, QuadMaterial.Plant), word1, word2);
           this.plants.push(packQuadWord0(x, y, z, Face.CrossB, QuadMaterial.Plant), word1, word2);
+          if (this.geometry !== "surface") {
+            this.minY = Math.min(this.minY, y);
+            this.maxY = Math.max(this.maxY, y + box.size / 16);
+          }
         }
       }
     }
@@ -348,7 +361,9 @@ class VoxelMesher {
 
   /** A cell is open when the sky reaches it directly or through covered air. */
   private isOpen(index: number, y: number, column: number): boolean {
-    return y > this.volume.topSolid[column]! || this.reached[index] === 1;
+    return (
+      this.geometry !== "surface" || y > this.volume.topSolid[column]! || this.reached[index] === 1
+    );
   }
 
   private isSolidAt(index: number, y: number): boolean {

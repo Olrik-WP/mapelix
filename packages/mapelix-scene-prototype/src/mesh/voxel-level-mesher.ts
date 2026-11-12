@@ -10,6 +10,7 @@ import {
   type SceneRegion,
 } from "../format.js";
 import { VoxelKind } from "./block-palette.js";
+import type { GeometryMode } from "../dimensions.js";
 import {
   COVER_DEPTH,
   KEY_COVERED,
@@ -52,14 +53,18 @@ const MATERIALS: Readonly<Record<number, QuadMaterial>> = {
 };
 
 /**
- * Turns a voxel region into packed quads, in voxel units. Like level 0, it keeps only
- * faces that touch air the sky can reach, merges equal faces, and shades corners.
+ * Turns a voxel region into packed quads, in voxel units. Surface mode retains the
+ * sky visibility optimization; dimension modes keep interior and island surfaces.
  */
-export function meshVoxelRegion(region: VoxelRegion): SceneRegion {
-  return new VoxelLevelMesher(region).mesh();
+export function meshVoxelRegion(
+  region: VoxelRegion,
+  geometry: GeometryMode = "surface",
+): SceneRegion {
+  return new VoxelLevelMesher(region, geometry).mesh();
 }
 
 class VoxelLevelMesher {
+  private readonly geometry: GeometryMode;
   private readonly region: VoxelRegion;
   private readonly box: VoxelBox;
   private readonly steps: FaceSteps;
@@ -84,7 +89,8 @@ class VoxelLevelMesher {
   private minLayer = Number.POSITIVE_INFINITY;
   private maxLayer = Number.NEGATIVE_INFINITY;
 
-  constructor(region: VoxelRegion) {
+  constructor(region: VoxelRegion, geometry: GeometryMode) {
+    this.geometry = geometry;
     this.region = region;
     this.box = region.box;
     this.steps = faceSteps(region.box.width);
@@ -94,15 +100,18 @@ class VoxelLevelMesher {
     this.roof = new Int16Array(this.area).fill(-1);
     this.top = new Int16Array(this.area).fill(-1);
     this.findColumnTops();
-    const open = findOpenAir(
-      {
-        size: this.box.width,
-        layers: this.box.layers,
-        roof: this.roof,
-        isOpaque: (index) => isOpaqueKind(this.box.kind[index]!),
-      },
-      Math.ceil(COVER_DEPTH / region.voxelSize),
-    );
+    const open =
+      geometry === "surface"
+        ? findOpenAir(
+            {
+              size: this.box.width,
+              layers: this.box.layers,
+              roof: this.roof,
+              isOpaque: (index) => isOpaqueKind(this.box.kind[index]!),
+            },
+            Math.ceil(COVER_DEPTH / region.voxelSize),
+          )
+        : { reached: new Uint8Array(0), lowest: new Int16Array(this.area) };
     this.reached = open.reached;
     this.lowestOpen = open.lowest;
     this.columnLow = this.findColumnRanges();
@@ -259,7 +268,7 @@ class VoxelLevelMesher {
     border: boolean,
   ): boolean {
     // Below the box is buried rock; above it is open sky.
-    if (neighborLayer < 0) return false;
+    if (neighborLayer < 0) return this.geometry === "islands";
     if (neighborLayer >= this.box.layers) return true;
     const neighborKind = this.box.kind[neighbor]!;
     if (isOpaqueKind(neighborKind)) {
@@ -327,13 +336,14 @@ class VoxelLevelMesher {
 
   /** Lowest layer of the walls facing unexplored land. Over water, the walls reach below the floor. */
   private edgeFloor(column: number): number {
+    if (this.geometry !== "surface") return 0;
     const roof = this.roof[column]!;
     return (roof === -1 ? this.top[column]! : roof) - this.edgeLayers;
   }
 
   /** A voxel is open when the sky reaches it directly or through covered air. */
   private isOpen(index: number, layer: number, column: number): boolean {
-    return layer > this.roof[column]! || this.reached[index] === 1;
+    return this.geometry !== "surface" || layer > this.roof[column]! || this.reached[index] === 1;
   }
 }
 

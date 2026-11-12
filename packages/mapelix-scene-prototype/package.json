@@ -12,6 +12,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./dimensions": {
+      "types": "./dist/dimensions.d.ts",
+      "import": "./dist/dimensions.js"
+    },
     "./format": {
       "types": "./dist/format.d.ts",
       "import": "./dist/format.js"
