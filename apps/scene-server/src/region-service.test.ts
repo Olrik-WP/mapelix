@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   InvalidRegionError,
+  NotCachedError,
   OverloadedError,
   RegionService,
   emptyRegionBytes,
@@ -68,6 +69,8 @@ function service(build: BuildRegion, store?: RegionStore, maxPending = 4): Regio
 }
 
 const signal = (): AbortSignal => new AbortController().signal;
+/** Lets the cache lookup that precedes every build finish. */
+const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("RegionService", () => {
   it("answers regions outside the world with an empty region and no build", async () => {
@@ -102,7 +105,7 @@ describe("RegionService", () => {
     const regions = service(builder.build);
     const first = regions.load("overworld", { level: 0, x: 0, z: 0 }, signal());
     const second = regions.load("overworld", { level: 0, x: 0, z: 0 }, signal());
-    await Promise.resolve();
+    await tick();
     expect(builder.calls).toBe(1);
     builder.pending[0]!.resolve();
     expect((await first).cacheStatus).toBe("build");
@@ -143,7 +146,7 @@ describe("RegionService", () => {
     expect(builder.pending[0]!.signal.aborted).toBe(true);
     // A later caller starts a fresh build instead of joining the abandoned one.
     const later = regions.load("overworld", { level: 0, x: 0, z: 0 }, signal());
-    await Promise.resolve();
+    await tick();
     expect(builder.calls).toBe(2);
     builder.pending[1]!.resolve();
     expect((await later).cacheStatus).toBe("build");
@@ -171,6 +174,25 @@ describe("RegionService", () => {
     }
   });
 
+  it("answers cache-only requests without ever building", async () => {
+    const builder = controlledBuilder();
+    const store = memoryStore();
+    store.files.set("overworld/0/1/1", emptyRegionBytes(0, 1, 1));
+    const regions = service(builder.build, store);
+    const options = { cacheOnly: true };
+    expect(
+      (await regions.load("overworld", { level: 0, x: 1, z: 1 }, signal(), options)).cacheStatus,
+    ).toBe("disk");
+    await expect(
+      regions.load("overworld", { level: 0, x: 0, z: 0 }, signal(), options),
+    ).rejects.toThrow(NotCachedError);
+    // Out of the world: still the free empty region.
+    expect(
+      (await regions.load("overworld", { level: 0, x: 90, z: 90 }, signal(), options)).cacheStatus,
+    ).toBe("empty");
+    expect(builder.calls).toBe(0);
+  });
+
   it("keeps memory under its byte budget", async () => {
     const builder = controlledBuilder();
     const regions = new RegionService({
@@ -182,7 +204,7 @@ describe("RegionService", () => {
     });
     for (let x = -2; x < 2; x += 1) {
       const pending = regions.load("overworld", { level: 0, x, z: 0 }, signal());
-      await Promise.resolve();
+      await tick();
       builder.pending.at(-1)!.resolve();
       await pending;
     }

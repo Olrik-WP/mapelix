@@ -61,6 +61,16 @@ export class OverloadedError extends Error {
   override readonly name = "OverloadedError";
 }
 
+/** A cache-only request asked for a region that has not been built yet. */
+export class NotCachedError extends Error {
+  override readonly name = "NotCachedError";
+}
+
+export interface LoadOptions {
+  /** Answer only from memory or disk; never start or join a build. */
+  readonly cacheOnly?: boolean;
+}
+
 /** The request names a dimension, level, or position this server never serves. */
 export class InvalidRegionError extends Error {
   override readonly name = "InvalidRegionError";
@@ -107,6 +117,7 @@ export class RegionService {
     dimension: Dimension,
     request: RegionRequest,
     signal: AbortSignal,
+    options: LoadOptions = {},
   ): Promise<RegionResult> {
     const startedAt = performance.now();
     const { level, x, z } = request;
@@ -133,6 +144,12 @@ export class RegionService {
         cacheStatus: "memory",
         milliseconds: performance.now() - startedAt,
       };
+    }
+
+    if (options.cacheOnly === true) {
+      const stored = await this.readStored(key, request);
+      if (stored === undefined) throw new NotCachedError(`Region ${key} is not built yet`);
+      return { bytes: stored, cacheStatus: "disk", milliseconds: performance.now() - startedAt };
     }
 
     let flight = this.inFlight.get(key);
@@ -192,15 +209,9 @@ export class RegionService {
   ): Promise<RegionResult> {
     const startedAt = performance.now();
     const store = this.options.store;
-    const stored = await store?.read(key);
+    const stored = await this.readStored(key, request);
     if (stored !== undefined) {
-      const bytes = aligned(stored);
-      if (isValidRegion(bytes, request)) {
-        this.remember(key, bytes);
-        return { bytes, cacheStatus: "disk", milliseconds: performance.now() - startedAt };
-      }
-      this.options.onEvent?.("cache.discarded", { key });
-      await store?.discard(key);
+      return { bytes: stored, cacheStatus: "disk", milliseconds: performance.now() - startedAt };
     }
 
     let built: BuiltBytes;
@@ -218,6 +229,21 @@ export class RegionService {
     await store?.write(key, bytes);
     this.remember(key, bytes);
     return { bytes, cacheStatus: "build", milliseconds: built.milliseconds };
+  }
+
+  /** A valid region from the disk cache, kept in memory too; corrupt files are dropped. */
+  private async readStored(key: string, request: RegionRequest): Promise<Uint8Array | undefined> {
+    const store = this.options.store;
+    const stored = await store?.read(key);
+    if (stored === undefined) return undefined;
+    const bytes = aligned(stored);
+    if (isValidRegion(bytes, request)) {
+      this.remember(key, bytes);
+      return bytes;
+    }
+    this.options.onEvent?.("cache.discarded", { key });
+    await store?.discard(key);
+    return undefined;
   }
 
   private remember(key: string, bytes: Uint8Array): void {

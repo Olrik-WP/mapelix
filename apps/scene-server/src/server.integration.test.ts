@@ -163,6 +163,75 @@ describe("scene server process", () => {
     expect((await readdir(cache)).length).toBe(1);
   }, 60_000);
 
+  it("serves anonymous front ends from the cache only, filled by the prewarm", async () => {
+    const privateTarget = unixSockets
+      ? { socketPath: join(work, "private.sock") }
+      : { port: await freePort() };
+    const publicTarget = unixSockets
+      ? { socketPath: join(work, "public.sock") }
+      : { port: await freePort() };
+    const address = (target: { socketPath: string } | { port: number }) =>
+      "socketPath" in target ? `unix:${target.socketPath}` : `tcp:127.0.0.1:${target.port}`;
+    const environment = {
+      MAPELIX_WORLD_DIRECTORY: world,
+      MAPELIX_LISTEN: address(privateTarget),
+      MAPELIX_PUBLIC_LISTEN: address(publicTarget),
+      MAPELIX_PUBLIC_SOCKET_MODE: "666",
+    };
+
+    // Without a prewarm, the public socket refuses what is not built yet.
+    const cold = await startServer({ ...environment, MAPELIX_CACHE_DIRECTORY: join(work, "cold") });
+    try {
+      const description = JSON.parse((await get(publicTarget, "/v1/world")).body.toString());
+      const bounds = description.dimensions[0].bounds;
+      const path = `/v1/dimensions/overworld/regions/2/${Math.floor(bounds.minX / 256)}/${Math.floor(bounds.minZ / 256)}`;
+      expect((await get(publicTarget, path)).status).toBe(404);
+      expect((await get(publicTarget, "/v1/health")).status).toBe(404);
+      expect((await get(privateTarget, path)).headers["x-mapelix-cache"]).toBe("build");
+      const cached = await get(publicTarget, path);
+      expect(cached.status).toBe(200);
+      expect(decodeSceneRegion(new Uint8Array(cached.body)).level).toBe(2);
+      if ("socketPath" in publicTarget) {
+        const { stat } = await import("node:fs/promises");
+        expect((await stat(publicTarget.socketPath)).mode & 0o777).toBe(0o666);
+      }
+    } finally {
+      cold.child.kill("SIGTERM");
+      await cold.exited;
+    }
+
+    // With a prewarm, every region of the stored area is ready for the public socket.
+    const warm = await startServer({
+      ...environment,
+      MAPELIX_CACHE_DIRECTORY: join(work, "warm"),
+      MAPELIX_PREWARM: "1",
+    });
+    try {
+      const deadline = Date.now() + 40_000;
+      let prewarm: { state: string; done: number; total: number } = {
+        state: "",
+        done: 0,
+        total: 1,
+      };
+      while (prewarm.state !== "done" && Date.now() < deadline) {
+        prewarm = JSON.parse((await get(privateTarget, "/v1/health")).body.toString()).prewarm;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(prewarm.state).toBe("done");
+      expect(prewarm.done).toBe(prewarm.total);
+      const description = JSON.parse((await get(publicTarget, "/v1/world")).body.toString());
+      const bounds = description.dimensions[0].bounds;
+      for (let level = 0; level <= 5; level += 1) {
+        const span = 64 << level;
+        const path = `/v1/dimensions/overworld/regions/${level}/${Math.floor(bounds.maxX / span)}/${Math.floor(bounds.maxZ / span)}`;
+        expect((await get(publicTarget, path)).status, path).toBe(200);
+      }
+    } finally {
+      warm.child.kill("SIGTERM");
+      await warm.exited;
+    }
+  }, 90_000);
+
   it("treats a missing world as a configuration error", async () => {
     const child = spawn(process.execPath, [main], {
       env: {

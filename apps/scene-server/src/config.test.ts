@@ -72,6 +72,33 @@ describe("parseListen", () => {
   });
 });
 
+describe("prewarm and public listener", () => {
+  it("are off unless asked for", () => {
+    const config = readConfig(base);
+    expect(config.prewarm).toBe(false);
+    expect(config.publicListen).toBeUndefined();
+    expect(config.prewarmMaxRegions).toBe(100_000);
+  });
+
+  it("let the public socket open to a folder's group, never to execute bits", () => {
+    const config = readConfig({
+      ...base,
+      MAPELIX_PREWARM: "1",
+      MAPELIX_PUBLIC_LISTEN: "unix:/run/public/scene.sock",
+      MAPELIX_PUBLIC_SOCKET_MODE: "666",
+    });
+    expect(config.prewarm).toBe(true);
+    expect(config.publicListen).toEqual({
+      kind: "unix",
+      path: "/run/public/scene.sock",
+      mode: 0o666,
+    });
+    expect(() => readConfig({ ...base, MAPELIX_PREWARM: "yes" })).toThrow(ConfigError);
+    expect(() => parseListen("unix:/run/s.sock", "667", true)).toThrow(ConfigError);
+    expect(() => parseListen("tcp:0.0.0.0:1", undefined, true)).toThrow(/loopback/);
+  });
+});
+
 describe("parseDimensions and parseBounds", () => {
   it("accepts known dimensions once each", () => {
     expect(parseDimensions("overworld, the-end,overworld")).toEqual(["overworld", "the-end"]);

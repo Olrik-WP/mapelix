@@ -5,8 +5,10 @@ import type { Dimension } from "@mapelix/scene-prototype";
 import { DIMENSIONS, type BlockBounds } from "./config.js";
 import {
   InvalidRegionError,
+  NotCachedError,
   OverloadedError,
   isAbort,
+  type LoadOptions,
   type RegionResult,
 } from "./region-service.js";
 
@@ -32,6 +34,7 @@ export interface RegionLoader {
     dimension: Dimension,
     request: { readonly level: number; readonly x: number; readonly z: number },
     signal: AbortSignal,
+    options?: LoadOptions,
   ): Promise<RegionResult>;
 }
 
@@ -40,6 +43,11 @@ export interface SceneHandlerOptions {
   readonly regions: RegionLoader;
   readonly health: () => Record<string, unknown>;
   readonly onEvent?: (event: string, detail: Record<string, unknown>) => void;
+  /**
+   * For an anonymous front end: regions come only from the cache, a missing one
+   * answers 404, and the health route is not offered.
+   */
+  readonly cacheOnly?: boolean;
 }
 
 const REGION_ROUTE = /^\/v1\/dimensions\/([a-z-]{1,16})\/regions\/(\d)\/(-?\d{1,9})\/(-?\d{1,9})$/;
@@ -69,7 +77,7 @@ export function createSceneHandler(
       return sendJson(response, 400, { error: "bad-request" });
     }
 
-    if (url.pathname === "/v1/health") {
+    if (url.pathname === "/v1/health" && options.cacheOnly !== true) {
       return sendJson(response, 200, { status: "ok", ...options.health() });
     }
     if (url.pathname === "/v1/world") return sendJson(response, 200, options.world);
@@ -94,12 +102,16 @@ export function createSceneHandler(
       if (!response.writableFinished) controller.abort();
     });
     const region = { level: Number(match[2]), x: Number(match[3]), z: Number(match[4]) };
-    options.regions.load(dimension, region, controller.signal).then(
+    const loadOptions = options.cacheOnly === true ? { cacheOnly: true } : {};
+    options.regions.load(dimension, region, controller.signal, loadOptions).then(
       (result) => sendRegion(response, result, revision !== null),
       (cause: unknown) => {
         if (isAbort(cause) || response.destroyed) return;
         if (cause instanceof InvalidRegionError) {
           return sendJson(response, 400, { error: "invalid-region", message: cause.message });
+        }
+        if (cause instanceof NotCachedError) {
+          return sendJson(response, 404, { error: "not-cached" });
         }
         if (cause instanceof OverloadedError) {
           response.setHeader("retry-after", "2");

@@ -31,6 +31,8 @@ export type { CameraView } from "./camera-rig";
 export interface WorldViewerOptions {
   /** Path the region requests start with, without a trailing slash. Defaults to `/regions`. */
   readonly regionBase?: string;
+  /** Added after `{level}/{x}/{z}`, such as `.bin` for caches that key on file extensions. */
+  readonly regionSuffix?: string;
 }
 
 export interface ViewerSnapshot {
@@ -96,6 +98,7 @@ export class WorldViewer {
     this.streamer = new RegionStreamer({
       revision: world.revision,
       ...(options.regionBase === undefined ? {} : { regionBase: options.regionBase }),
+      ...(options.regionSuffix === undefined ? {} : { regionSuffix: options.regionSuffix }),
       materials,
       voxelPixels: 2.2,
       blockPixels: 4.4,

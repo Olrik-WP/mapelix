@@ -46,6 +46,20 @@ empty region at once, without a build or a disk write. When too many builds wait
 | `MAPELIX_CACHE_MAX_MB`    | `1024`               | Disk cache budget. The oldest regions go first beyond it.    |
 | `MAPELIX_BOUNDS`          | scanned              | `minX,minZ,maxX,maxZ` in blocks, replacing the scanned area. |
 
+## Prewarm and the public listener
+
+`MAPELIX_PREWARM=1` builds every region of the stored area after start-up, coarse levels first and
+nearest the middle of the world first, one region at a time so visitors wait behind at most one
+build. Regions already on disk are only read. It stops before the disk cache passes 85 % of its
+budget, and `MAPELIX_PREWARM_MAX_REGIONS` (default 100,000) caps the plan while keeping the coarse
+levels. `/v1/health` reports its progress under `prewarm`.
+
+`MAPELIX_PUBLIC_LISTEN` opens a second listener for an anonymous front end. It serves `/v1/world`
+and regions **from the cache only**: a region that is not built yet answers `404 not-cached`, so no
+visitor can make the server work. It does not offer `/v1/health`. `MAPELIX_PUBLIC_SOCKET_MODE`
+(default `660`) may give others read and write access when the socket's folder already restricts
+who can reach it; execute bits are refused.
+
 ## Lifecycle
 
 - The revision hashes the database file names, sizes, and times, `level.dat`, and the engine code.

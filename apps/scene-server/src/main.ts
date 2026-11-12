@@ -5,11 +5,18 @@ import { join } from "node:path";
 import { openSceneWorld, type Dimension, type SceneWorld } from "@mapelix/scene-prototype";
 import { MAX_REGION_LEVEL, REGION_FORMAT_VERSION } from "@mapelix/scene-prototype/format";
 
-import { ConfigError, readConfig, type BlockBounds, type ServerConfig } from "./config.js";
+import {
+  ConfigError,
+  readConfig,
+  type BlockBounds,
+  type ListenTarget,
+  type ServerConfig,
+} from "./config.js";
 import { DiskCache } from "./disk-cache.js";
 import { parseExtent, scanWorldExtent, type WorldExtent } from "./extent.js";
 import { API_VERSION, createSceneServer, type WorldDescription } from "./http-server.js";
 import { log } from "./log.js";
+import { Prewarmer, prewarmPlan } from "./prewarm.js";
 import { RegionService } from "./region-service.js";
 import { engineFingerprint, worldRevision } from "./revision.js";
 
@@ -74,32 +81,56 @@ async function main(): Promise<void> {
     maxRegionLevel: MAX_REGION_LEVEL,
     dimensions: config.dimensions.map((id) => ({ id, bounds: bounds.get(id) ?? null })),
   };
-  const server = createSceneServer({
-    world,
+  const prewarmer = new Prewarmer(
     regions,
-    health: () => ({
-      apiVersion: API_VERSION,
-      revision,
-      uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
-      workers: config.workers,
-      builds: regions.stats,
-      cache: disk.stats,
-      dimensions: config.dimensions,
-    }),
-    onEvent: (event, detail) => log("warn", event, detail),
+    config.prewarm ? prewarmPlan(bounds, config.prewarmMaxRegions) : [],
+    () => disk.stats.bytes > disk.stats.maxBytes * 0.85,
+    (event, detail) => log("info", event, detail),
+  );
+  const health = (): Record<string, unknown> => ({
+    apiVersion: API_VERSION,
+    revision,
+    uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+    workers: config.workers,
+    builds: regions.stats,
+    cache: disk.stats,
+    prewarm: prewarmer.progress,
+    dimensions: config.dimensions,
   });
-  await listen(server, config);
-  log("info", "server.ready", { revision, name: world.name, dimensions: world.dimensions });
+  const onEvent = (event: string, detail: Record<string, unknown>): void =>
+    log("warn", event, detail);
+  const server = createSceneServer({ world, regions, health, onEvent });
+  await listen(server, config.listen);
+  // Anonymous front ends get their own socket, which can never start a build.
+  const publicServer =
+    config.publicListen === undefined
+      ? undefined
+      : createSceneServer({ world, regions, health, onEvent, cacheOnly: true });
+  if (publicServer !== undefined && config.publicListen !== undefined) {
+    await listen(publicServer, config.publicListen);
+  }
+  log("info", "server.ready", {
+    revision,
+    name: world.name,
+    dimensions: world.dimensions,
+    publicListener: publicServer !== undefined,
+    prewarm: config.prewarm,
+  });
+  const stopPrewarm = new AbortController();
+  if (config.prewarm) void prewarmer.run(stopPrewarm.signal);
 
   let stopping = false;
   const stop = (signal: string): void => {
     if (stopping) return;
     stopping = true;
     log("info", "server.stopping", { signal });
+    stopPrewarm.abort();
     const forced = setTimeout(() => process.exit(0), 10_000);
     forced.unref();
-    server.close();
-    server.closeIdleConnections();
+    for (const running of [server, publicServer]) {
+      running?.close();
+      running?.closeIdleConnections();
+    }
     void Promise.allSettled(
       [...worlds.values()].map(async (opened) => (await opened).close()),
     ).then(() => process.exit(0));
@@ -140,8 +171,7 @@ async function loadExtent(config: ServerConfig, revision: string): Promise<World
   return extent;
 }
 
-async function listen(server: Server, config: ServerConfig): Promise<void> {
-  const target = config.listen;
+async function listen(server: Server, target: ListenTarget): Promise<void> {
   if (target.kind === "unix") {
     // Remove a socket left by an earlier process, but never any other kind of file.
     const existing = await lstat(target.path).catch(() => undefined);

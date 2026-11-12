@@ -30,6 +30,14 @@ export interface ServerConfig {
   readonly diskCacheBytes: number;
   /** Replaces the scanned world extent for every dimension. */
   readonly bounds: BlockBounds | undefined;
+  /** Builds every stored region in the background after start-up. */
+  readonly prewarm: boolean;
+  readonly prewarmMaxRegions: number;
+  /**
+   * A second, cache-only listener for an anonymous front end: it never starts a
+   * build and serves only the world description and regions.
+   */
+  readonly publicListen: ListenTarget | undefined;
 }
 
 const MIB = 1024 * 1024;
@@ -63,6 +71,12 @@ export function readConfig(env: Environment): ServerConfig {
     memoryCacheBytes: integer(env, "MAPELIX_MEMORY_CACHE_MB", 64, 0, 4096) * MIB,
     diskCacheBytes: integer(env, "MAPELIX_CACHE_MAX_MB", 1024, 16, 1024 * 1024) * MIB,
     bounds: parseBounds(env.MAPELIX_BOUNDS),
+    prewarm: flag(env, "MAPELIX_PREWARM"),
+    prewarmMaxRegions: integer(env, "MAPELIX_PREWARM_MAX_REGIONS", 100_000, 1, 10_000_000),
+    publicListen:
+      env.MAPELIX_PUBLIC_LISTEN === undefined || env.MAPELIX_PUBLIC_LISTEN.trim() === ""
+        ? undefined
+        : parseListen(env.MAPELIX_PUBLIC_LISTEN, env.MAPELIX_PUBLIC_SOCKET_MODE, true),
   };
 }
 
@@ -76,6 +90,13 @@ function absolutePath(env: Environment, name: string): string {
 function isInside(child: string, parent: string): boolean {
   const path = relative(parent, child);
   return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+}
+
+function flag(env: Environment, name: string): boolean {
+  const raw = (env[name] ?? "").trim().toLowerCase();
+  if (raw === "" || raw === "0" || raw === "false") return false;
+  if (raw === "1" || raw === "true") return true;
+  throw new ConfigError(`${name} must be 0 or 1`);
 }
 
 function integer(
@@ -95,14 +116,27 @@ function integer(
   return value;
 }
 
-export function parseListen(raw: string, modeText: string | undefined): ListenTarget {
+/**
+ * `othersMayConnect` is for a socket whose folder already limits who can reach it,
+ * such as the public listener inside a folder of the front end's group.
+ */
+export function parseListen(
+  raw: string,
+  modeText: string | undefined,
+  othersMayConnect = false,
+): ListenTarget {
   if (raw.startsWith("unix:")) {
     const path = raw.slice("unix:".length);
     if (!isAbsolute(path)) throw new ConfigError("MAPELIX_LISTEN unix socket must be absolute");
     const text = modeText === undefined || modeText.trim() === "" ? "660" : modeText.trim();
     const mode = Number.parseInt(text, 8);
-    if (!/^[0-7]{3,4}$/.test(text) || (mode & 0o007) !== 0) {
-      throw new ConfigError("MAPELIX_SOCKET_MODE must be octal and give others no access");
+    const forbidden = othersMayConnect ? 0o111 : 0o007;
+    if (!/^[0-7]{3,4}$/.test(text) || (mode & forbidden) !== 0 || mode > 0o777) {
+      throw new ConfigError(
+        othersMayConnect
+          ? "MAPELIX_PUBLIC_SOCKET_MODE must be octal without execute bits"
+          : "MAPELIX_SOCKET_MODE must be octal and give others no access",
+      );
     }
     return { kind: "unix", path, mode };
   }

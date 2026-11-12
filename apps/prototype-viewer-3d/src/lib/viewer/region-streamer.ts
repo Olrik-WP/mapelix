@@ -23,6 +23,8 @@ export interface StreamingOptions {
   readonly revision: string;
   /** Path the region requests start with, without a trailing slash. Defaults to `/regions`. */
   readonly regionBase?: string;
+  /** Added after `{level}/{x}/{z}`, such as `.bin` for caches that key on file extensions. */
+  readonly regionSuffix?: string;
   readonly materials: SceneMaterials;
   /**
    * Largest size of a voxel on screen, in pixels. A node splits into its four children
@@ -332,7 +334,8 @@ export class RegionStreamer {
     this.requests.set(target.key, controller);
     const base = this.options.regionBase ?? "/regions";
     const revision = encodeURIComponent(this.options.revision);
-    const url = `${base}/${target.level}/${target.x}/${target.z}?revision=${revision}`;
+    const suffix = this.options.regionSuffix ?? "";
+    const url = `${base}/${target.level}/${target.x}/${target.z}${suffix}?revision=${revision}`;
     fetch(url, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`Region ${target.key} failed with ${response.status}`);
