@@ -1,27 +1,11 @@
 {
   "version": "1.26.60.5",
   "total": 1466,
-  "sampled": 1254,
+  "sampled": 1276,
   "unresolved": [
-    {
-      "block": "acacia_leaves",
-      "reason": "PNG unavailable: textures/blocks/leaves_acacia"
-    },
     {
       "block": "air",
       "reason": "No resource texture binding"
-    },
-    {
-      "block": "bed",
-      "reason": "Blanket color is stored in a block entity, not in the bed_bottom wood texture."
-    },
-    {
-      "block": "birch_leaves",
-      "reason": "PNG unavailable: textures/blocks/leaves_birch"
-    },
-    {
-      "block": "cactus",
-      "reason": "PNG unavailable: textures/blocks/cactus_top"
     },
     {
       "block": "chemical_heat",
@@ -48,12 +32,8 @@
       "reason": "No resource texture binding"
     },
     {
-      "block": "dark_oak_leaves",
-      "reason": "PNG unavailable: textures/blocks/leaves_big_oak"
-    },
-    {
       "block": "disc_press",
-      "reason": "No resource texture binding"
+      "reason": "Registry-only identifier: no block definition or visual asset in samples 1.26.60.5."
     },
     {
       "block": "element_0",
@@ -536,16 +516,8 @@
       "reason": "No resource texture binding"
     },
     {
-      "block": "fern",
-      "reason": "PNG unavailable: textures/blocks/fern"
-    },
-    {
       "block": "grass_block",
       "reason": "No resource texture binding"
-    },
-    {
-      "block": "grindstone",
-      "reason": "PNG unavailable: textures/blocks/grindstone_round"
     },
     {
       "block": "hard_black_stained_glass",
@@ -689,23 +661,11 @@
     },
     {
       "block": "icicle",
-      "reason": "No resource texture binding"
-    },
-    {
-      "block": "jungle_leaves",
-      "reason": "PNG unavailable: textures/blocks/leaves_jungle"
-    },
-    {
-      "block": "kelp",
-      "reason": "PNG unavailable: textures/blocks/kelp_c"
+      "reason": "Registry-only identifier: no block definition or visual asset in samples 1.26.60.5."
     },
     {
       "block": "lab_table",
       "reason": "No resource texture binding"
-    },
-    {
-      "block": "large_fern",
-      "reason": "PNG unavailable: textures/blocks/double_plant_fern_top"
     },
     {
       "block": "light_block_0",
@@ -772,64 +732,20 @@
       "reason": "No resource texture binding"
     },
     {
-      "block": "lilac",
-      "reason": "PNG unavailable: textures/blocks/double_plant_syringa_top"
-    },
-    {
-      "block": "mangrove_leaves",
-      "reason": "PNG unavailable: textures/blocks/mangrove_leaves"
-    },
-    {
       "block": "material_reducer",
       "reason": "No resource texture binding"
-    },
-    {
-      "block": "oak_leaves",
-      "reason": "PNG unavailable: textures/blocks/leaves_oak"
-    },
-    {
-      "block": "pale_oak_leaves",
-      "reason": "PNG unavailable: textures/blocks/pale_oak_leaves"
     },
     {
       "block": "piston_arm_collision",
       "reason": "No resource texture binding"
     },
     {
-      "block": "reeds",
-      "reason": "PNG unavailable: textures/blocks/reeds"
-    },
-    {
-      "block": "scaffolding",
-      "reason": "PNG unavailable: textures/blocks/scaffolding_top"
-    },
-    {
       "block": "sea_lantern",
       "reason": "No resource texture binding"
     },
     {
-      "block": "seagrass",
-      "reason": "PNG unavailable: textures/blocks/seagrass_doubletall_top_a"
-    },
-    {
-      "block": "spruce_leaves",
-      "reason": "PNG unavailable: textures/blocks/leaves_spruce"
-    },
-    {
       "block": "sticky_piston_arm_collision",
       "reason": "No resource texture binding"
-    },
-    {
-      "block": "stonecutter_block",
-      "reason": "PNG unavailable: textures/blocks/stonecutter2_saw"
-    },
-    {
-      "block": "straw_bed",
-      "reason": "No resource texture binding"
-    },
-    {
-      "block": "tall_grass",
-      "reason": "PNG unavailable: textures/blocks/double_plant_grass_top"
     },
     {
       "block": "trip_wire",
@@ -845,11 +761,7 @@
     },
     {
       "block": "unknown",
-      "reason": "No resource texture binding"
-    },
-    {
-      "block": "waterlily",
-      "reason": "Unsupported texture waterlily at index 0"
+      "reason": "Engine placeholder, not a vanilla gameplay block."
     }
   ]
 }

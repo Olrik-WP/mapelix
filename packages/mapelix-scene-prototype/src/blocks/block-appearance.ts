@@ -242,10 +242,12 @@ export function resolveBlockAppearance(
   if (shape.kind === "water") return uniform(shape, rgb(38, 92, 200), "water");
   const sampled =
     !name.includes(":") || name.startsWith("minecraft:") ? BEDROCK_BLOCK_COLORS[block] : undefined;
-  // These broad legacy rules lose ore hosts, copper oxidation, and lava/magma contrast.
+  // Prefer source samples where a legacy rule conflates distinct vanilla colors.
   if (
     sampled !== undefined &&
-    /(?:^|_)ore$|copper|^(?:lava|flowing_lava|magma|brown_mushroom|red_mushroom)$/.test(block)
+    /(?:^|_)ore$|copper|blackstone|^(?:bed|lava|flowing_lava|magma|brown_mushroom|red_mushroom|nether_wart|nether_sprouts|(?:crimson|warped)_(?:roots|fungus)|(?:red_)?nether_brick\w*|soul_sand|soul_soil|(?:ochre|verdant|pearlescent)_froglight)$/.test(
+      block,
+    )
   ) {
     return sampledAppearance(shape, sampled, states);
   }

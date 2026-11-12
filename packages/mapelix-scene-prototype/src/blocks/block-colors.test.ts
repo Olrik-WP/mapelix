@@ -73,8 +73,57 @@ describe("sampled Bedrock block colors", () => {
     );
   });
 
-  it("does not infer bed blankets from the catalog's oak bed-bottom texture", () => {
-    expect(resolveBlockAppearance("minecraft:bed", {}).top).toBe(0xd8d8d8);
+  it("samples every bed blanket independently, retaining wood only on the underside", () => {
+    const colors = Array.from({ length: 16 }, (_, color) =>
+      resolveBlockAppearance("minecraft:bed", { color }),
+    );
+    expect(new Set(colors.map((color) => color.top)).size).toBe(16);
+    expect(colors[0]).toMatchObject({ top: 0xd7d4cd, bottom: 0xa2834f });
+    expect(colors[14]?.top).toBe(0xb06359);
+    expect(resolveBlockAppearance("minecraft:bed", {})).toEqual(colors[0]);
+    const palette = new BlockPalette();
+    expect(palette.idFor("minecraft:bed", { color: 0 })).not.toBe(
+      palette.idFor("minecraft:bed", { color: 14 }),
+    );
+  });
+
+  it("distinguishes the remaining Nether color families and crop stages", () => {
+    expect(resolveBlockAppearance("minecraft:nether_brick", {}).top).toBe(0x2c161a);
+    expect(resolveBlockAppearance("minecraft:red_nether_brick", {}).top).toBe(0x460709);
+    expect(resolveBlockAppearance("minecraft:soul_sand", {}).top).not.toBe(
+      resolveBlockAppearance("minecraft:soul_soil", {}).top,
+    );
+    const young = resolveBlockAppearance("minecraft:nether_wart", { age: 0 });
+    const mature = resolveBlockAppearance("minecraft:nether_wart", { age: 3 });
+    expect(young.top).toBe(0x761316);
+    expect(mature.top).not.toBe(young.top);
+    expect(mature.shape).toEqual(young.shape);
+    const palette = new BlockPalette();
+    expect(palette.idFor("minecraft:nether_wart", { age: 0 })).not.toBe(
+      palette.idFor("minecraft:nether_wart", { age: 3 }),
+    );
+  });
+
+  it("retains three distinct froglight colors and their emissive material", () => {
+    const lights = ["ochre", "verdant", "pearlescent"].map((name) =>
+      resolveBlockAppearance(`minecraft:${name}_froglight`, {}),
+    );
+    expect(new Set(lights.map((light) => light.top)).size).toBe(3);
+    for (const light of lights)
+      expect(light.shape).toEqual({ kind: "cube", material: QuadMaterial.Emissive });
+  });
+
+  it("does not paint cracked blackstone gray or group fungi with roots", () => {
+    const blackstone = resolveBlockAppearance("minecraft:cracked_polished_blackstone_bricks", {});
+    expect((blackstone.top >> 16) & 255).toBeLessThan(80);
+    const fungus = resolveBlockAppearance("minecraft:warped_fungus", {});
+    const roots = resolveBlockAppearance("minecraft:warped_roots", {});
+    expect(fungus.top).not.toBe(roots.top);
+    expect(fungus.shape).toEqual(roots.shape);
+  });
+
+  it.each(["scaffolding", "straw_bed"])("uses source textures for %s instead of gray", (name) => {
+    expect(resolveBlockAppearance(`minecraft:${name}`, {}).top).not.toBe(0xd8d8d8);
   });
 
   it("does not apply vanilla texture samples to an add-on's block with the same local name", () => {

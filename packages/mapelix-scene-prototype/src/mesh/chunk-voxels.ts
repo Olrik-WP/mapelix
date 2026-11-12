@@ -87,7 +87,7 @@ export class ChunkVoxelReader {
       ) {
         continue;
       }
-      const cells = sectionCells(section, this.palette);
+      const cells = sectionCells(section, this.palette, records.bedColors.get(section.y));
       const top = this.highestFilled(cells);
       if (top === -1) continue;
       sections.push({ y: section.y, cells, top });

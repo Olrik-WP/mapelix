@@ -88,6 +88,31 @@ export function biomeRecord(
   return { key: chunkKey(dimension, x, z, 0x2b), value };
 }
 
+/** Real concatenated little-endian block-entity compounds, without touching a real world. */
+export function bedEntityRecord(
+  dimension: number,
+  chunkX: number,
+  chunkZ: number,
+  beds: readonly { x: number; y: number; z: number; color?: number; id?: string }[],
+): FixtureRecord {
+  const bytes: number[] = [];
+  const string = (value: string): number[] => {
+    const encoded = new TextEncoder().encode(value);
+    return [encoded.length & 255, encoded.length >> 8, ...encoded];
+  };
+  for (const bed of beds) {
+    bytes.push(10, 0, 0, 8, ...string("id"), ...string(bed.id ?? "Bed"));
+    for (const key of ["x", "y", "z"] as const) {
+      const value = new Uint8Array(4);
+      new DataView(value.buffer).setInt32(0, bed[key], true);
+      bytes.push(3, ...string(key), ...value);
+    }
+    if (bed.color !== undefined) bytes.push(1, ...string("color"), bed.color & 255);
+    bytes.push(0);
+  }
+  return { key: chunkKey(dimension, chunkX, chunkZ, 0x31), value: new Uint8Array(bytes) };
+}
+
 export function dimensionFixtureRecords(): FixtureRecord[] {
   const records: FixtureRecord[] = [];
   for (let z = 0; z < 4; z++) {

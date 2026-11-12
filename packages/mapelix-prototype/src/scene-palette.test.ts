@@ -44,13 +44,24 @@ describe("offline scene palette generation", () => {
         },
       },
       fixture_transparent: { textures: "transparent" },
+      fixture_tga: { textures: "tga" },
+      fixture_tga_rle: { textures: "tga_rle" },
       bed: { textures: "green" },
     };
     const textureData = Object.fromEntries(
-      ["alpha", "red", "green", "blue", "transparent", "missing_north", "missing_south"].map(
-        (name) => [name, { textures: `textures/blocks/${name}` }],
-      ),
+      [
+        "alpha",
+        "red",
+        "green",
+        "blue",
+        "transparent",
+        "missing_north",
+        "missing_south",
+        "tga",
+        "tga_rle",
+      ].map((name) => [name, { textures: `textures/blocks/${name}` }]),
     );
+    textureData.bed_bottom = { textures: "textures/blocks/green" };
     await writeFile(join(directory, "resource_pack/blocks.json"), JSON.stringify(blocks));
     await writeFile(
       join(directory, "resource_pack/textures/terrain_texture.json"),
@@ -76,6 +87,50 @@ describe("offline scene palette generation", () => {
         PNG.sync.write(png),
       );
     }
+    await mkdir(join(directory, "resource_pack/textures/entity/bed"), { recursive: true });
+    for (const color of [
+      "white",
+      "orange",
+      "magenta",
+      "light_blue",
+      "yellow",
+      "lime",
+      "pink",
+      "gray",
+      "silver",
+      "cyan",
+      "purple",
+      "blue",
+      "brown",
+      "green",
+      "red",
+      "black",
+    ]) {
+      const image = new PNG({ width: 64, height: 64 });
+      for (let pixel = 0; pixel < 64 * 64; pixel++) image.data.set([0, 255, 0, 255], pixel * 4);
+      for (const top of [6, 28])
+        for (let y = top; y < top + 16; y++)
+          for (let x = 6; x < 22; x++) image.data.set([0, 0, 255, 255], (y * 64 + x) * 4);
+      await writeFile(
+        join(directory, `resource_pack/textures/entity/bed/${color}.png`),
+        PNG.sync.write(image),
+      );
+    }
+    const tga = Buffer.alloc(26);
+    tga[2] = 2;
+    tga.writeUInt16LE(2, 12);
+    tga.writeUInt16LE(1, 14);
+    tga[16] = 32;
+    tga[17] = 8;
+    tga.set([0, 0, 255, 255, 255, 0, 0, 0], 18);
+    await writeFile(join(directory, "resource_pack/textures/blocks/tga.tga"), tga);
+    const rle = Buffer.alloc(22);
+    rle[2] = 10;
+    rle.writeUInt16LE(2, 12);
+    rle.writeUInt16LE(1, 14);
+    rle[16] = 24;
+    rle.set([129, 0, 255, 0], 18);
+    await writeFile(join(directory, "resource_pack/textures/blocks/tga_rle.tga"), rle);
     await run(process.execPath, [generator, directory, output, report]);
   });
   afterAll(async () => {
@@ -88,26 +143,29 @@ describe("offline scene palette generation", () => {
     expect(generated).toContain("fixture_faces: { colors: [0xff0000, 0x408040, 0x0000ff]");
   });
 
-  it("reports missing/transparent textures and excludes bed blankets explicitly", async () => {
+  it("reports missing/transparent textures in a deterministic order", async () => {
     const coverage = JSON.parse(await readFile(report, "utf8")) as {
       total: number;
       sampled: number;
       unresolved: { block: string; reason: string }[];
     };
-    expect(coverage.total).toBe(6);
-    expect(coverage.sampled).toBe(2);
+    expect(coverage.total).toBe(8);
+    expect(coverage.sampled).toBe(5);
     expect(coverage.unresolved.map((entry) => entry.block)).toEqual([
-      "bed",
       "fixture_missing",
       "fixture_missing_faces",
       "fixture_transparent",
     ]);
-    expect(coverage.unresolved.find((entry) => entry.block === "bed")?.reason).toContain(
-      "block entity",
-    );
     expect(
       coverage.unresolved.find((entry) => entry.block === "fixture_missing_faces")?.reason,
-    ).toBe("PNG unavailable: textures/blocks/missing_north");
+    ).toBe("Texture unavailable (PNG/TGA): textures/blocks/missing_north");
+  });
+
+  it("samples mattress UVs instead of unused entity pixels and decodes alpha/RLE TGA", async () => {
+    const generated = await readFile(output, "utf8");
+    expect(generated).toContain("bed: { colors: [0x0000ff, 0x0000ff, 0x00ff00]");
+    expect(generated).toContain("fixture_tga: { colors: [0xff0000, 0xff0000, 0xff0000]");
+    expect(generated).toContain("fixture_tga_rle: { colors: [0x00ff00, 0x00ff00, 0x00ff00]");
   });
 
   it("reproduces identical source and coverage for identical resources", async () => {

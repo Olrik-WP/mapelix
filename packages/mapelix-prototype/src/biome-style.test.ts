@@ -3,6 +3,35 @@ import { describe, expect, it } from "vitest";
 import { canonicalBiomeId, legacyBiomeStyle } from "./biome-style.js";
 
 describe("legacyBiomeStyle", () => {
+  it.each([
+    [48, 21, [20, 162, 197]],
+    [49, 22, [27, 158, 216]],
+  ] as const)(
+    "uses jungle climate and explicit client water for bamboo biome %i",
+    (id, jungle, rgb) => {
+      const profile = legacyBiomeStyle(id);
+      expect(profile.groundGrass).toEqual(legacyBiomeStyle(jungle).groundGrass);
+      expect(profile.foliage).toEqual(legacyBiomeStyle(jungle).foliage);
+      expect([profile.water.red, profile.water.green, profile.water.blue]).toEqual(rgb);
+    },
+  );
+
+  it("uses the pale garden's explicit desaturated grass, foliage and water", () => {
+    expect(legacyBiomeStyle(193)).toMatchObject({
+      groundGrass: { red: 104, green: 114, blue: 100 },
+      foliage: { red: 76, green: 79, blue: 66 },
+      water: { red: 118, green: 136, blue: 157 },
+    });
+  });
+
+  it("assigns registry-only ice caves an explicit frozen-family fallback", () => {
+    expect(legacyBiomeStyle(196)).toEqual(legacyBiomeStyle(12));
+  });
+
+  it("retains neutral tints for dimension-specific Nether and End atmospheres", () => {
+    expect(legacyBiomeStyle(8)).toEqual(legacyBiomeStyle(9999));
+    expect(legacyBiomeStyle(9)).toEqual(legacyBiomeStyle(9999));
+  });
   it("matches the published classic plains colors", () => {
     expect(legacyBiomeStyle(1)).toMatchObject({
       groundGrass: { red: 127, green: 166, blue: 78 },

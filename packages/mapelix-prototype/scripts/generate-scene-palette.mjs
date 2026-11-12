@@ -42,9 +42,21 @@ for (const name of [...knownBlocks].sort(compare)) {
     const colors = await faces(textures, 0);
     const variants = [];
     for (const variant of override.variants ?? []) {
+      const bindings = variant.textures ?? textures;
+      const variantTextures =
+        variant.path === undefined
+          ? bindings
+          : Object.fromEntries(
+              Object.entries(bindings).map(([face, binding]) => [
+                face,
+                typeof binding === "object" && binding.path !== undefined
+                  ? { ...binding, path: variant.path }
+                  : binding,
+              ]),
+            );
       variants.push({
         states: variant.states,
-        colors: await faces(variant.textures ?? textures, variant.textureIndex ?? 0),
+        colors: await faces(variantTextures, variant.textureIndex ?? 0),
       });
     }
     palette.set(block, { colors, variants });
@@ -154,32 +166,59 @@ async function textureMean(keys, index) {
   for (const binding of names) {
     const key = typeof binding === "string" ? binding : binding.key;
     const selectedIndex = typeof binding === "string" ? index : binding.index;
-    const definition = terrain.texture_data[key]?.textures;
-    const path = Array.isArray(definition) ? definition[selectedIndex] : definition;
+    const definition =
+      typeof binding === "object" && binding.path !== undefined
+        ? binding.path
+        : terrain.texture_data[key]?.textures;
+    let path = Array.isArray(definition) ? definition[selectedIndex] : definition;
+    if (typeof path === "object" && path !== null) path = path.path;
     if (typeof path !== "string")
       throw new UnsupportedTexture(`Unsupported texture ${key} at index ${selectedIndex}`);
-    let color = images.get(path);
+    const regions = typeof binding === "object" ? binding.regions : undefined;
+    const sampleKey = regions === undefined ? path : `${path}|${JSON.stringify(regions)}`;
+    let color = images.get(sampleKey);
     if (color === undefined) {
       let bytes;
       try {
         bytes = await readFile(resolve(samplesDirectory, "resource_pack", `${path}.png`));
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
-        throw new UnsupportedTexture(`PNG unavailable: ${path}`);
+        try {
+          bytes = await readFile(resolve(samplesDirectory, "resource_pack", `${path}.tga`));
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          throw new UnsupportedTexture(`Texture unavailable (PNG/TGA): ${path}`);
+        }
       }
       fingerprints.set(path, createHash("sha256").update(bytes).digest("hex"));
-      const { data } = PNG.sync.read(bytes);
+      const { data, width, height } = bytes[0] === 137 ? PNG.sync.read(bytes) : readTga(bytes);
       const total = [0, 0, 0];
       let weight = 0;
-      for (let pixel = 0; pixel < data.length; pixel += 4) {
-        const alpha = data[pixel + 3];
-        weight += alpha;
-        for (let channel = 0; channel < 3; channel++)
-          total[channel] += data[pixel + channel] * alpha;
+      for (const [x, y, w, h] of regions ?? [[0, 0, width, height]]) {
+        if (
+          ![x, y, w, h].every(Number.isInteger) ||
+          x < 0 ||
+          y < 0 ||
+          w <= 0 ||
+          h <= 0 ||
+          x + w > width ||
+          y + h > height
+        ) {
+          throw new UnsupportedTexture(`Invalid sample rectangle: ${path}`);
+        }
+        for (let row = y; row < y + h; row++) {
+          for (let column = x; column < x + w; column++) {
+            const pixel = (row * width + column) * 4;
+            const alpha = data[pixel + 3];
+            weight += alpha;
+            for (let channel = 0; channel < 3; channel++)
+              total[channel] += data[pixel + channel] * alpha;
+          }
+        }
       }
       if (weight === 0) throw new UnsupportedTexture(`Fully transparent texture: ${path}`);
       color = total.map((sum) => sum / weight);
-      images.set(path, color);
+      images.set(sampleKey, color);
     }
     colors.push(color);
   }
@@ -204,4 +243,56 @@ function literal(colors) {
 
 function compare(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** True-color TGA, including RLE, decoded only by this offline generation tool. */
+function readTga(bytes) {
+  if (bytes.length < 18) throw new UnsupportedTexture("Truncated TGA header");
+  const type = bytes[2];
+  const width = bytes.readUInt16LE(12);
+  const height = bytes.readUInt16LE(14);
+  const channels = bytes[16] / 8;
+  if (
+    bytes[1] !== 0 ||
+    (type !== 2 && type !== 10) ||
+    (channels !== 3 && channels !== 4) ||
+    width === 0 ||
+    height === 0 ||
+    width * height > 16_777_216
+  ) {
+    throw new UnsupportedTexture("Unsupported TGA layout");
+  }
+  const data = new Uint8Array(width * height * 4);
+  const descriptor = bytes[17];
+  let offset = 18 + bytes[0];
+  let written = 0;
+  const pixel = () => {
+    if (offset + channels > bytes.length) throw new UnsupportedTexture("Truncated TGA pixels");
+    const rgba = [
+      bytes[offset + 2],
+      bytes[offset + 1],
+      bytes[offset],
+      channels === 4 && (descriptor & 15) !== 0 ? bytes[offset + 3] : 255,
+    ];
+    offset += channels;
+    return rgba;
+  };
+  while (written < width * height) {
+    if (offset >= bytes.length) throw new UnsupportedTexture("Truncated TGA pixels");
+    const packet = type === 10 ? bytes[offset++] : 0;
+    const count = (packet & 127) + 1;
+    if (written + count > width * height) throw new UnsupportedTexture("Invalid TGA run length");
+    const repeated = (packet & 128) !== 0 ? pixel() : undefined;
+    for (let i = 0; i < count; i++) {
+      const rgba = repeated ?? pixel();
+      const x = (descriptor & 16) !== 0 ? width - 1 - (written % width) : written % width;
+      const y =
+        (descriptor & 32) !== 0
+          ? Math.floor(written / width)
+          : height - 1 - Math.floor(written / width);
+      data.set(rgba, (y * width + x) * 4);
+      written++;
+    }
+  }
+  return { data, width, height };
 }

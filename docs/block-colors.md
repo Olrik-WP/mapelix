@@ -1,13 +1,14 @@
 # Bedrock block color palette
 
-The palette is generated from the complete official Bedrock samples 1.26.60.5 registry,
-not from a particular world's inventory. The source is the supplied
-`bedrock-samples-v1.26.60.5-full.zip`. No texture images or third-party source code are
-included in the generated module. PNG decoding uses the existing `pngjs` dependency.
+The palette is generated from the complete registry in the supplied official
+`bedrock-samples-v1.26.60.5-full.zip`, independently of any particular world.
+Only numeric colors and source bindings are included, not Mojang texture images
+or third-party source code. The offline generator reuses `pngjs` and reads
+true-color TGA itself; no runtime dependency is added.
 
 ## Generation and coverage
 
-Extract the samples into an ignored development directory, then run from the repository root:
+Extract the full samples into an ignored directory. From the repository root:
 
 ```sh
 pnpm --filter @mapelix/prototype exec node scripts/generate-scene-palette.mjs \
@@ -16,75 +17,95 @@ pnpm --filter @mapelix/prototype exec node scripts/generate-scene-palette.mjs \
   ../../docs/block-colors-coverage.json
 ```
 
-The relative output paths account for `pnpm --filter ... exec` changing the working
-directory to `packages/mapelix-prototype`. Format the generated TypeScript with that
-package's existing `oxfmt` tool afterwards.
+The output paths account for `pnpm --filter ... exec` changing directories to
+`packages/mapelix-prototype`. Format the output with the existing `oxfmt` tool.
 
-The generator joins `mojang-blocks.json`, `blocks.json` and `terrain_texture.json`.
-It samples 1,254 of the 1,466 official identifiers using 953 PNG textures. The
-[coverage report](block-colors-coverage.json) explicitly lists the other 212 identifiers:
-191 have no resource texture binding, 19 have no supported PNG at the declared path,
-one uses an unsupported atlas entry, and beds require block-entity data. These are
-texture-binding counts, including technical and Education blocks, not fidelity scores.
+The generator joins `mojang-blocks.json`, `blocks.json` and `terrain_texture.json`,
+with explicit bindings for entity-textured beds and other special blocks. It samples
+1,276 of 1,466 identifiers using 1,011 image samples. The remaining 190 entries are
+listed in the [coverage report](block-colors-coverage.json); many are technical,
+Education-only, hidden, or already covered by existing rules. This is a source-binding
+count, not a fidelity score.
 
-Colors are alpha-weighted sRGB means. Fully transparent pixels contribute no black fringe;
-the four lateral faces receive equal weight. Animated image strips produce a stable mean,
-not an animation. The input fingerprint is recorded in the generated file. Explicit source
-bindings handle atlas indexes, modern identifiers, barrel/cauldron faces, and decorated pots.
-State variants cover mushroom growth, copper-bulb lit/powered states, trial spawners and vaults.
+The catalog-wide regression test permits ordinary visible gray only for these
+explicit exceptions: `disc_press` and `icicle` have no block definition or visual
+resource in this ZIP, and `unknown` is an engine placeholder. Their appearances
+are not invented. Education chemistry/element blocks and hardened glass remain
+outside this vanilla gameplay milestone. Add-ons require their own resources;
+for example, `tac_guns:workbench` is absent from the vanilla archive.
 
-## Rendering policy
+Colors are alpha-weighted sRGB means, with equal weight for lateral faces.
+PNG and raw/RLE true-color TGA are supported. Cropped mattress UVs exclude unused
+entity pixels and bed legs. Animated strips produce a stable mean, not an animation.
+An input fingerprint and fixed traversal make generation and error reports reproducible.
 
-The existing shapes, material flags, shaders, meshing, AO and LOD policies remain in place.
-Sampled colors override broad ore/copper rules and distinguish lava from magma, retaining
-their emissive material. Other existing 3D colors and biome tint policies take priority;
-the generated catalog then replaces inherited generic or gray fallback colors. Fixed cherry,
-azalea, pale-oak and poplar foliage is retained. Sampled variants participate in palette cache
-identity only for the blocks that use them. The Bedrock `fence_gate` alias reuses oak's
-existing appearance. The 2D block-style palette is unchanged.
+## Rendering and beds
 
-The client biome definitions supply explicit grass/foliage/water for dappled forest (195),
-and grass/water for sulfur caves (194). Unspecified sulfur-cave foliage retains the default.
-Existing biome IDs retain their previous behavior.
+Existing shapes, materials, shaders, AO, visibility and LOD policies remain.
+Samples override rules that conflated ores, copper oxidation, lava/magma,
+Nether bricks, soul ground, roots/fungi, wart growth, blackstone variants and
+froglights. Existing tuned terrain and foliage colors otherwise stay in use;
+fixed cherry, azalea, pale-oak and poplar colors are retained. The 2D block-style
+palette is unchanged.
 
-## Validation and limitations
+The scene reader handles Bedrock tag `0x31` as optional block-entity metadata.
+It validates bed dyes (0-15), chunk coordinates, dimension and height. The shared
+`sectionCells` path applies colors only to actual beds at detailed and coarse LODs;
+stale entities cannot repaint other blocks. Missing or malformed metadata retains
+the client entity's default white appearance without preventing terrain rendering.
+The shared NBT decoder also accepts valid empty End-typed lists used by block entities.
 
-The read-only Overworld/Nether snapshot used for validation prioritizes visible failures,
-without defining the generated catalog. Of its 35 distinct vanilla identifiers previously
-using gray fallback, 34 now resolve to explicit colors or the existing oak appearance.
-The remaining `minecraft:bed` has no blanket color in the palette states currently read;
-its resource binding points to oak planks for the underside, so it is deliberately excluded.
-The snapshot's `tac_guns:workbench` is outside the vanilla ZIP and keeps its fallback.
+All 16 blankets are sampled independently; oak is retained on the underside.
+Different bed dyes and conditional texture states have distinct palette cache keys.
+Head/foot geometry and orientation approximations are unchanged.
 
-Generator tests cover alpha, lateral-face weighting, unresolved entries and reproducibility.
-Appearance tests cover ore hosts, oxidation, axes, state-cache separation and namespace isolation.
-Generated-region tests check colors in all three dimensions at all six LODs. The four
-committed fixture byte fingerprints intentionally change with the palette; no historical
-2D reference image is regenerated. Real End validation still requires an explored End world.
-An isolated pre-color palette reproduces all four original fixture hashes; comparison with
-the recolored fixture retains the height grids and surface area by face/material at those LODs.
+## Biomes
 
-Completed checks: 150 prototype tests, 104 scene tests, six viewer tests, engine/viewer builds,
-type checks and focused formatting checks. Lint has no errors and retains two pre-existing
-sort warnings in `foliage-region.test.ts`. Four browser tests pass on generated fixtures and
-four on the read-only snapshot, covering WebGPU and forced WebGL. Snapshot database bytes
-remain unchanged. The complete patch also passes `git apply --cached --check`
-against `f622e3a` using an isolated temporary index.
+Every ID in the supplied biome registry has a profile or explicit family fallback:
 
-Geometry approximations, hidden blocks, block-entity colors, additional conditional texture
-variants, resource-pack meshes, local block-light propagation and fluid animation remain
-outside this color change. No underground exploration path is added.
+- Bamboo jungle (48) and hills (49) use jungle climate and their client water colors.
+- Pale garden (193), sulfur caves (194) and dappled forest (195) use explicit client
+  colors. Unspecified sulfur-cave foliage retains the default.
+- Ice caves (196) has no behavior or client resource in this archive. It explicitly
+  uses the snowy-tundra color family pending official resources.
+- Nether (8) and End (9) retain neutral tints; their dimension atmosphere is separate.
 
-## Bedrock Control integration
+Legacy mutation aliases are preserved. No sky or per-biome fog effects are added.
 
-The color work starts from generic engine commit `d726cfc`, separately from Bedrock Control.
-Its patch applies to integration revision `f622e3a` without modifying `apps/scene-server`,
-the embedded interface, configurable base paths, `.bin` suffixes, dimensions or ceilings.
-API/viewer version 2 and region format 2 remain compatible; no embedded-interface change
-requires a version increment.
+## Validation and integration
 
-The prototype's mesh revision is bumped to invalidate its old color caches. The existing
-server at `f622e3a` fingerprints compiled engine JavaScript, including the new palette module,
-so rebuilding the engine produces a different server/world revision and separate cache entries.
-Do not reuse an old compiled release or its old revision when validating the new colors.
-No panel, updater or deployment changes are part of this patch.
+Tests cover sampling, transparent pixels, TGA, cropped entity UVs, regeneration,
+all bed dyes, conditional caches, negative coordinates, dimensions, stale/corrupt
+metadata and unexpected gray fallback across the complete catalog. Generated
+regions exercise all three meshers and all six LODs. Real End validation still
+requires a world containing explored End chunks.
+
+The read-only snapshot has 80 bed blocks in four dye colors, all matched to their
+stored colors, plus two stale entities that are ignored. Snapshot bytes are checked
+unchanged. Historical 2D reference images are not regenerated.
+
+Completed validation: 283 unit tests, eight browser regression tests (generated
+fixtures and the real Overworld/Nether snapshot), six catalog captures in automatic
+and forced-WebGL modes, builds, type checks and focused formatting. All 90 official
+biome IDs have profiles; no other biome colors changed. Regeneration is identical.
+Lint retains only two pre-existing sort warnings in `foliage-region.test.ts`.
+All 14 snapshot files, including `level.dat`, remain byte-identical. The two
+color patches apply in order to `f622e3a` using an isolated temporary index.
+
+Generic base: `d726cfc`. Commit `54c7a6c` establishes the catalog; its successor
+completes the remaining work. Integrate them in order on `f622e3a`. No changes touch
+`apps/scene-server`, panel/updater code, the embedded interface, base paths, `.bin`
+suffixes, dimensions or ceilings. API/viewer version 2 and region format 2 remain.
+The prototype mesh revision is 22; the existing server fingerprints compiled engine
+JavaScript, so rebuilding produces separate revision/cache entries.
+
+## Separate follow-up topics
+
+These work items start after the color commit, in another topic:
+
+- Exact shapes/models: stairs, doors, fences, scaffolding, beds, chorus and small blocks.
+- Lava appearance: surface textures, animation, flow/levels, glow intensity, bloom
+  and possible local lighting. Static emissive rendering remains in this milestone.
+- Overworld underground exploration: the cave/gallery view, navigation below the
+  surface, altitude controls and bounded visibility/volume budgets. The existing
+  Nether ceiling cut remains; no underground visibility or slicing path is added.
