@@ -13,7 +13,8 @@
     "format:check": "prettier --check .",
     "lint": "svelte-check --tsconfig ./tsconfig.json",
     "quality": "pnpm run check && pnpm run format:check",
-    "transit": "node -e \"\""
+    "transit": "node -e \"\"",
+    "build:embed": "vite build --config vite.embed.config.ts"
   },
   "engines": {
     "node": ">=24"

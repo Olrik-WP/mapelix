@@ -27,6 +27,12 @@ export interface WorldInfo {
 
 export type { CameraView } from "./camera-rig";
 
+/** How the viewer reaches its region server. */
+export interface WorldViewerOptions {
+  /** Path the region requests start with, without a trailing slash. Defaults to `/regions`. */
+  readonly regionBase?: string;
+}
+
 export interface ViewerSnapshot {
   readonly backend: "WebGPU" | "WebGL 2";
   readonly framesPerSecond: number;
@@ -80,6 +86,7 @@ export class WorldViewer {
     world: WorldInfo,
     renderer: WebGPURenderer,
     start: Partial<CameraView>,
+    options: WorldViewerOptions,
   ) {
     this.container = container;
     this.renderer = renderer;
@@ -88,6 +95,7 @@ export class WorldViewer {
     const materials = createSceneMaterials(this.atmosphere);
     this.streamer = new RegionStreamer({
       revision: world.revision,
+      ...(options.regionBase === undefined ? {} : { regionBase: options.regionBase }),
       materials,
       voxelPixels: 2.2,
       blockPixels: 4.4,
@@ -138,6 +146,7 @@ export class WorldViewer {
     container: HTMLElement,
     world: WorldInfo,
     start: Partial<CameraView> = {},
+    options: WorldViewerOptions = {},
   ): Promise<WorldViewer> {
     const renderer = new WebGPURenderer({
       antialias: false,
@@ -149,7 +158,7 @@ export class WorldViewer {
     renderer.toneMappingExposure = 1;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = PCFShadowMap;
-    return new WorldViewer(container, world, renderer, start);
+    return new WorldViewer(container, world, renderer, start, options);
   }
 
   get backend(): ViewerSnapshot["backend"] {

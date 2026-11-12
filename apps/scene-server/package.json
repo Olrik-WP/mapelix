@@ -1,0 +1,35 @@
+{
+  "name": "@mapelix/scene-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hardened HTTP server for Mapelix 3D scene regions, meant to sit behind an authenticating proxy.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "check": "tsc --noEmit --project tsconfig.json",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint --type-aware --type-check .",
+    "pack:deploy": "node scripts/pack-deploy.mjs",
+    "quality": "pnpm run check && pnpm run lint && pnpm run format:check && pnpm run test:unit",
+    "start": "node dist/main.js",
+    "test": "vitest run src",
+    "test:unit": "vitest run src",
+    "transit": "node -e \"\""
+  },
+  "dependencies": {
+    "@mapelix/prototype": "workspace:*",
+    "@mapelix/scene-prototype": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.13",
+    "oxfmt": "0.61.0",
+    "oxlint": "1.76.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "typescript": "7.0.2",
+    "vitest": "4.1.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

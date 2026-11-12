@@ -21,6 +21,8 @@ import type { SceneMaterials } from "./shaders/materials";
 
 export interface StreamingOptions {
   readonly revision: string;
+  /** Path the region requests start with, without a trailing slash. Defaults to `/regions`. */
+  readonly regionBase?: string;
   readonly materials: SceneMaterials;
   /**
    * Largest size of a voxel on screen, in pixels. A node splits into its four children
@@ -328,7 +330,9 @@ export class RegionStreamer {
   private request(target: RegionNode): void {
     const controller = new AbortController();
     this.requests.set(target.key, controller);
-    const url = `/regions/${target.level}/${target.x}/${target.z}?revision=${this.options.revision}`;
+    const base = this.options.regionBase ?? "/regions";
+    const revision = encodeURIComponent(this.options.revision);
+    const url = `${base}/${target.level}/${target.x}/${target.z}?revision=${revision}`;
     fetch(url, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`Region ${target.key} failed with ${response.status}`);
