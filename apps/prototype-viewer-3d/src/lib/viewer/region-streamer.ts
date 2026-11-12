@@ -18,8 +18,10 @@ import {
 import { regionEntry, type SurfaceHit } from "./quad-collider";
 import { RegionMesh } from "./region-mesh";
 import type { SceneMaterials } from "./shaders/materials";
+import { DIMENSIONS, contextSearch, type SceneContext } from "@mapelix/scene-prototype/dimensions";
 
 export interface StreamingOptions {
+  readonly context: SceneContext;
   readonly revision: string;
   readonly materials: SceneMaterials;
   /**
@@ -102,6 +104,7 @@ export class RegionStreamer {
   /** Screen pixels covered by one block at a distance of one block. */
   private pixelsPerBlock = 1;
   private viewDistance: number;
+  private disposed = false;
 
   constructor(options: StreamingOptions) {
     this.options = options;
@@ -220,6 +223,7 @@ export class RegionStreamer {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const controller of this.requests.values()) controller.abort();
     this.requests.clear();
     for (const cached of this.cache.values()) cached.mesh?.dispose();
@@ -227,6 +231,8 @@ export class RegionStreamer {
     this.drawn.clear();
     this.fades.clear();
     this.root.clear();
+    this.bytes = 0;
+    this.wanted = [];
   }
 
   /**
@@ -328,15 +334,20 @@ export class RegionStreamer {
   private request(target: RegionNode): void {
     const controller = new AbortController();
     this.requests.set(target.key, controller);
-    const url = `/regions/${target.level}/${target.x}/${target.z}?revision=${this.options.revision}`;
+    const params = contextSearch(this.options.context);
+    params.set("revision", this.options.revision);
+    const url = `/regions/${target.level}/${target.x}/${target.z}?${params}`;
     fetch(url, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`Region ${target.key} failed with ${response.status}`);
-        const region = decodeSceneRegion(new Uint8Array(await response.arrayBuffer()));
+        const bytes = await response.arrayBuffer();
+        if (this.disposed || controller.signal.aborted) return;
+        const region = decodeSceneRegion(new Uint8Array(bytes));
         const mesh = new RegionMesh(region, this.options.materials);
         this.store(target, mesh.isEmpty ? undefined : mesh);
       })
       .catch((cause: unknown) => {
+        if (this.disposed || controller.signal.aborted) return;
         if (!(cause instanceof DOMException && cause.name === "AbortError")) {
           console.warn(cause);
         }
@@ -374,16 +385,28 @@ export class RegionStreamer {
   private distanceTo(target: RegionNode): number {
     const span = regionSpan(target.level);
     const cached = this.cache.get(target.key)?.mesh?.region;
-    this.box.min.set(target.x * span, cached?.minY ?? TYPICAL_LOW, target.z * span);
-    this.box.max.set((target.x + 1) * span, cached?.maxY ?? TYPICAL_HIGH, (target.z + 1) * span);
+    const { dimension, ceilingY } = this.options.context;
+    const low = dimension === "overworld" ? TYPICAL_LOW : DIMENSIONS[dimension].minY;
+    const high = dimension === "overworld" ? TYPICAL_HIGH : ceilingY;
+    this.box.min.set(target.x * span, cached?.minY ?? low, target.z * span);
+    this.box.max.set((target.x + 1) * span, cached?.maxY ?? high, (target.z + 1) * span);
     return this.box.distanceToPoint(this.cameraPosition);
   }
 
   /** Nearer nodes load first; nodes outside the view wait behind visible ones. */
   private priority(target: RegionNode, distance: number): number {
     const span = regionSpan(target.level);
-    this.box.min.set(target.x * span, TYPICAL_LOW - 64, target.z * span);
-    this.box.max.set((target.x + 1) * span, TYPICAL_HIGH + 64, (target.z + 1) * span);
+    const { dimension, ceilingY } = this.options.context;
+    this.box.min.set(
+      target.x * span,
+      dimension === "overworld" ? TYPICAL_LOW - 64 : DIMENSIONS[dimension].minY,
+      target.z * span,
+    );
+    this.box.max.set(
+      (target.x + 1) * span,
+      dimension === "overworld" ? TYPICAL_HIGH + 64 : ceilingY,
+      (target.z + 1) * span,
+    );
     return this.frustum.intersectsBox(this.box) ? distance : distance * 3 + span;
   }
 }

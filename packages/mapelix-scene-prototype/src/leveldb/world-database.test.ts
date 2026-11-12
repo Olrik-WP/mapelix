@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import { readLevelDbRecords } from "@mapelix/prototype/bedrock";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { WorldDatabase } from "./world-database.js";
+import { RegionBuilder } from "../node/region-builder.js";
 
 const run = promisify(execFile);
 const fixture = fileURLToPath(
@@ -54,6 +56,21 @@ describe("seekable world database", () => {
         }
       }
       expect(found).toEqual(records);
+    }
+  });
+
+  it.each([
+    [0, "e9d18dc8ca9ff828c71aa06e8b1cb1894cb2b42a3000b3140439130b7b19ee0e"],
+    [1, "9b3b327688c41853c400e50977e3927c303d1e50bda4f6c544ff5d1b0113b0a5"],
+    [3, "ee426fbed3e125600ed1307bbb4753c65a3e8832a8e3dfac7aaf1e7f62a26dab"],
+    [5, "4e870ec433bd334ea2a88c9974c74b5951623ff7a656d97f9a51a32cd9f8dcab"],
+  ] as const)("preserves exact Overworld region bytes from main at LOD %i", (level, expected) => {
+    const builder = new RegionBuilder({ directory, dimension: "overworld" });
+    try {
+      const bytes = builder.build({ level, x: 0, z: 0 });
+      expect(createHash("sha256").update(bytes).digest("hex")).toBe(expected);
+    } finally {
+      builder.close();
     }
   });
 });

@@ -1,5 +1,14 @@
 <script lang="ts">
   import type { Attachment } from "svelte/attachments";
+  import {
+    DIMENSIONS,
+    contextKey,
+    contextSearch,
+    parseDimension,
+    sceneContext,
+    type Dimension,
+    type SceneContext,
+  } from "@mapelix/scene-prototype/dimensions";
 
   import CoordinateReadout from "$lib/components/CoordinateReadout.svelte";
   import DebugPanel from "$lib/components/DebugPanel.svelte";
@@ -24,6 +33,10 @@
   let renderDistance = $state(32_000);
   let zoomUnlocked = $state(false);
   let hintVisible = $state(true);
+  let dimension = $state<Dimension>("overworld");
+  let ceilingY = $state(96);
+  let switching = $state(false);
+  let loadContext: ((context: SceneContext) => Promise<void>) | undefined;
 
   $effect(() => {
     viewer?.setTimeOfDay(hour);
@@ -46,13 +59,54 @@
     let created: WorldViewer | undefined;
     let polling: ReturnType<typeof setInterval> | undefined;
     let lastUrl = "";
-    const start = readViewFromUrl(new URL(window.location.href));
+    let start;
+    try {
+      start = readViewFromUrl(new URL(window.location.href));
+    } catch (cause) {
+      failure = cause instanceof Error ? cause.message : String(cause);
+      return;
+    }
+    dimension = start.context.dimension;
+    ceilingY = start.context.ceilingY;
     hour = start.hour ?? DEFAULT_HOUR;
+    let metadataRequest = new AbortController();
+    let generation = 0;
+
+    loadContext = async (context) => {
+      const current = ++generation;
+      metadataRequest.abort();
+      metadataRequest = new AbortController();
+      switching = true;
+      failure = undefined;
+      try {
+        const response = await fetch(`/world.json?${contextSearch(context)}`, {
+          signal: metadataRequest.signal,
+        });
+        if (!response.ok) throw new Error(`The dimension could not be opened (${response.status})`);
+        const info: WorldInfo = await response.json();
+        if (disposed || current !== generation) return;
+        created?.setWorld(info, world?.dimension === info.dimension);
+        world = info;
+        dimension = info.dimension;
+        ceilingY = info.ceilingY;
+        pointed = undefined;
+        snapshot = created?.snapshot();
+      } catch (cause) {
+        if (disposed || current !== generation) return;
+        failure = cause instanceof Error ? cause.message : String(cause);
+        if (world) {
+          dimension = world.dimension;
+          ceilingY = world.ceilingY;
+        }
+      } finally {
+        if (current === generation) switching = false;
+      }
+    };
 
     void (async () => {
       const [{ WorldViewer }, response] = await Promise.all([
         import("$lib/viewer/world-viewer"),
-        fetch("/world.json"),
+        fetch(`/world.json?${contextSearch(start.context)}`, { signal: metadataRequest.signal }),
       ]);
       if (!response.ok) throw new Error(`The world could not be opened (${response.status})`);
       const info: WorldInfo = await response.json();
@@ -67,11 +121,12 @@
       polling = setInterval(() => {
         snapshot = created?.snapshot();
         if (snapshot === undefined) return;
-        const key = JSON.stringify([snapshot.view, hour]);
-        if (key !== lastUrl) writeViewToUrl(snapshot.view, hour);
+        const key = JSON.stringify([snapshot.view, hour, world && contextKey(world)]);
+        if (key !== lastUrl && world) writeViewToUrl(snapshot.view, hour, world);
         lastUrl = key;
       }, 250);
     })().catch((cause: unknown) => {
+      if (disposed) return;
       failure = cause instanceof Error ? cause.message : String(cause);
     });
 
@@ -100,6 +155,8 @@
 
     return () => {
       disposed = true;
+      metadataRequest.abort();
+      loadContext = undefined;
       clearInterval(polling);
       clearTimeout(hintTimer);
       element.removeEventListener("pointermove", onPointerMove);
@@ -151,6 +208,33 @@
     </div>
 
     <div class="top-right">
+      <div class="glass dimensions">
+        <label for="dimension">Dimension</label>
+        <select
+          id="dimension"
+          value={dimension}
+          disabled={!viewer || switching}
+          onchange={(event) =>
+            void loadContext?.(sceneContext(parseDimension(event.currentTarget.value)))}
+        >
+          {#each Object.values(DIMENSIONS) as config}
+            <option value={config.dimension}>{config.label}</option>
+          {/each}
+        </select>
+        {#if dimension === "nether"}
+          <label for="ceiling">Hide terrain from Y {ceilingY}</label>
+          <input
+            id="ceiling"
+            type="range"
+            min="16"
+            max="128"
+            step="16"
+            bind:value={ceilingY}
+            disabled={switching}
+            onchange={() => void loadContext?.(sceneContext(dimension, ceilingY))}
+          />
+        {/if}
+      </div>
       <JumpForm onjump={(x, z) => viewer?.flyTo(x, z)} onhome={returnToSpawn} />
     </div>
 
@@ -164,7 +248,7 @@
           Drag to move, right-drag to turn, scroll to zoom. WASD, Q and E work too.
         </p>
       {/if}
-      <TimeOfDay bind:hour />
+      {#if dimension === "overworld"}<TimeOfDay bind:hour />{/if}
     </div>
 
     <div class="bottom-right">
@@ -178,6 +262,23 @@
 </main>
 
 <style>
+  .dimensions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+    max-width: 320px;
+  }
+
+  .dimensions select {
+    color: var(--text);
+    background: #1b2532;
+    border: 1px solid #586473;
+    border-radius: 5px;
+    padding: 5px 8px;
+  }
   main,
   .scene {
     position: fixed;

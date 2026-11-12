@@ -7,8 +7,11 @@ import { meshVoxelRegion } from "../mesh/voxel-level-mesher.js";
 import { meshRegionVolume } from "../mesh/voxel-mesher.js";
 import { buildVoxelRegion } from "../mesh/voxel-region.js";
 import { ChunkSource, type Dimension } from "../world/chunk-source.js";
+import { sceneContext } from "../dimensions.js";
 
 export interface RegionRequest {
+  /** Exclusive upper mesh bound, in multiples of 16. Defaults to the dimension profile. */
+  readonly ceilingY?: number;
   readonly level: number;
   readonly x: number;
   readonly z: number;
@@ -43,15 +46,19 @@ export class RegionBuilder {
     this.database.close();
   }
 
-  private mesh({ level, x, z }: RegionRequest): SceneRegion {
+  private mesh({ level, x, z, ceilingY }: RegionRequest): SceneRegion {
+    const config = this.chunks.config;
+    const context = sceneContext(config.dimension, ceilingY);
     if (level === 0) {
-      const volume = buildRegionVolume(this.chunks, this.palette, x, z);
+      const volume = buildRegionVolume(this.chunks, this.palette, x, z, context.ceilingY);
       return volume === undefined
         ? emptyRegion(level, x, z)
-        : meshRegionVolume(volume, this.palette, x, z);
+        : meshRegionVolume(volume, this.palette, x, z, config.geometry);
     }
-    const voxels = buildVoxelRegion(this.voxels, level, x, z);
-    return voxels === undefined ? emptyRegion(level, x, z) : meshVoxelRegion(voxels);
+    const voxels = buildVoxelRegion(this.voxels, level, x, z, context.ceilingY);
+    return voxels === undefined
+      ? emptyRegion(level, x, z)
+      : meshVoxelRegion(voxels, config.geometry);
   }
 }
 

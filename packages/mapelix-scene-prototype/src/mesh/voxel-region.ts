@@ -40,6 +40,7 @@ export function buildVoxelRegion(
   level: number,
   regionX: number,
   regionZ: number,
+  ceilingY?: number,
 ): VoxelRegion | undefined {
   const voxelSize = regionCellSize(level);
   const span = regionGridSize(level);
@@ -56,7 +57,7 @@ export function buildVoxelRegion(
   let regionHasChunks = false;
   for (let row = 0; row < chunksPerSide; row += 1) {
     for (let column = 0; column < chunksPerSide; column += 1) {
-      const chunk = reader.read(firstChunkX + column, firstChunkZ + row, voxelSize);
+      const chunk = reader.read(firstChunkX + column, firstChunkZ + row, voxelSize, ceilingY);
       if (chunk === undefined) continue;
       regionHasChunks ||=
         row >= marginChunks &&
@@ -73,7 +74,7 @@ export function buildVoxelRegion(
   const box = new VoxelBox(span + margin * 2, (high - low) / voxelSize);
   const explored = new Uint8Array(box.width * box.width);
   for (const chunk of placed) {
-    placeChunk(box, chunk, (chunk.low - low) / voxelSize);
+    placeChunk(box, chunk, (chunk.low - low) / voxelSize, reader.geometry === "surface");
     for (let z = 0; z < chunkVoxels; z += 1) {
       explored.fill(
         1,
@@ -86,7 +87,12 @@ export function buildVoxelRegion(
 }
 
 /** Copies a chunk into the region box, and fills the layers below it with its deepest voxels. */
-function placeChunk(box: VoxelBox, chunk: PlacedChunk, firstLayer: number): void {
+function placeChunk(
+  box: VoxelBox,
+  chunk: PlacedChunk,
+  firstLayer: number,
+  fillBelow: boolean,
+): void {
   const source = chunk.box;
   for (let z = 0; z < source.width; z += 1) {
     for (let x = 0; x < source.width; x += 1) {
@@ -98,6 +104,7 @@ function placeChunk(box: VoxelBox, chunk: PlacedChunk, firstLayer: number): void
 
       const deepest = source.index(x, 0, z);
       const solidBelow = isOpaqueKind(source.kind[deepest]!);
+      if (!fillBelow) continue;
       for (let layer = 0; layer < firstLayer; layer += 1) {
         const to = box.index(chunk.x + x, layer, chunk.z + z);
         if (solidBelow) {

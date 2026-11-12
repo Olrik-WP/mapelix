@@ -26,13 +26,21 @@ The server builds each region the first time a browser asks for it and keeps the
 The cache key includes the world's table files, so a changed world builds fresh regions. Each
 region response has `x-mapelix-cache: memory`, `disk`, or `build` and a `server-timing` duration.
 
+Dimension and mesh ceiling are included in memory, disk and HTTP cache identities. Switching
+dimensions replaces the terrain streamer, aborts previous requests and retains the renderer.
+An unvisited dimension displays empty space until the copied world contains chunks there.
+
 ## Controls
 
+- Select Overworld, Nether or The End in the dimension menu. The Nether roof control hides
+  terrain at and above the selected Y, in 16-block steps, before any mesh or LOD is generated.
+- Nether starts at the Overworld spawn divided by eight; End starts at X 100, Z 0. These
+  are navigation entry points, not stored portal or player positions.
 - Drag to move. Right-drag to turn and tilt. Scroll to zoom toward the point under the cursor.
 - W, A, S, and D move. Q and E turn. R and F zoom.
 - Enter X and Z coordinates to fly there. The house button returns to spawn.
 - The compass turns the view to face north.
-- The slider sets the time of day.
+- The Overworld slider sets the time of day. Nether and End use fixed lighting and atmosphere.
 - F3 shows the frame rate, the backend, and streaming statistics. It also has switches for the
   edge fog and two experimental options: zooming out to 20,000 blocks and a custom render
   distance from 2,000 to 100,000 blocks.
@@ -44,6 +52,22 @@ into and climbs over walls and steps.
 The address bar keeps the current view, so a link opens the same place. It accepts `x`, `y`,
 `z`, `distance`, `heading`, and `pitch` in blocks and degrees, and `hour` from 0 to 24. A link
 without `y` looks at the highest block at `x` and `z`.
+
+Links also retain `dimension` (`overworld`, `nether`, `the-end`) and `ceilingY`. For example,
+`?dimension=nether&ceilingY=80&x=0&z=0` opens a Nether cut at Y 80.
+
+## Validation
+
+From the monorepo root, run `pnpm turbo run test:unit --filter=@mapelix/prototype-viewer-3d`.
+Run `pnpm turbo run test:e2e --filter=@mapelix/prototype-viewer-3d` for browser/API tests with
+a generated disposable database. They exercise normal GPU selection and forced WebGL fallback.
+Set `MAPELIX_TEST_BROWSER=chrome` to use installed Chrome instead of Playwright Chromium.
+Set `MAPELIX_E2E_WORLD_DIRECTORY` to a disposable extracted world snapshot to validate real
+terrain; test setup does not change that directory. Test caches and screenshots stay in `.local`
+and `test-results` respectively. Build the scene package before invoking the app test command
+directly; the root Turborepo task builds its dependencies automatically.
+
+See [milestone notes](../../docs/native-dimensions.md) for the API contract and measurements.
 
 ## How it draws the world
 

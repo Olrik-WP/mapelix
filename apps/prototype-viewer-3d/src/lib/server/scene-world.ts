@@ -5,6 +5,14 @@ import { dirname, join, resolve } from "node:path";
 
 import { openSceneWorld, type RegionRequest, type SceneWorld } from "@mapelix/scene-prototype";
 import { REGION_FORMAT_VERSION } from "@mapelix/scene-prototype/format";
+import {
+  DIMENSIONS,
+  regionCacheKey,
+  sceneContext,
+  type Dimension,
+  type DimensionConfig,
+  type SceneContext,
+} from "@mapelix/scene-prototype/dimensions";
 
 const worldDirectory =
   process.env.MAPELIX_WORLD_DIRECTORY ??
@@ -14,7 +22,7 @@ const workers = positiveInteger(
   process.env.MAPELIX_SCENE_WORKERS ?? String(Math.min(8, Math.max(2, availableParallelism() - 2))),
 );
 /** Bump when mesh output changes without a format change, so stale disk caches are ignored. */
-const meshRevision = 18;
+const meshRevision = 20;
 const maxMemoryRegions = 384;
 
 export type CacheStatus = "memory" | "disk" | "build";
@@ -26,32 +34,58 @@ export interface LoadedRegion {
 }
 
 export interface WorldMetadata {
+  readonly dimension: Dimension;
+  readonly ceilingY: number;
+  readonly dimensions: readonly DimensionConfig[];
   readonly name: string;
   readonly spawn: { readonly x: number; readonly y: number; readonly z: number };
   /** Changes whenever the world files or the mesh output change. */
   readonly revision: string;
 }
 
-let worldPromise: Promise<SceneWorld> | undefined;
+const worlds = new Map<Dimension, Promise<SceneWorld>>();
 let revisionPromise: Promise<string> | undefined;
 const memory = new Map<string, Promise<LoadedRegion>>();
 
-export function getSceneWorld(): Promise<SceneWorld> {
-  worldPromise ??= openSceneWorld({ directory: worldDirectory, workers });
-  return worldPromise;
+export function getSceneWorld(dimension: Dimension = "overworld"): Promise<SceneWorld> {
+  let pending = worlds.get(dimension);
+  if (pending === undefined) {
+    pending = openSceneWorld({ directory: worldDirectory, dimension, workers });
+    worlds.set(dimension, pending);
+    void pending.catch(() => worlds.delete(dimension));
+  }
+  return pending;
 }
 
-export async function getWorldMetadata(): Promise<WorldMetadata> {
-  const [world, revision] = await Promise.all([getSceneWorld(), getRevision()]);
-  return { name: world.info.name, spawn: world.info.spawn, revision };
+export async function getWorldMetadata(
+  context: SceneContext = sceneContext(),
+): Promise<WorldMetadata> {
+  const [world, revision] = await Promise.all([getSceneWorld(context.dimension), getRevision()]);
+  const spawn =
+    context.dimension === "overworld"
+      ? world.info.spawn
+      : context.dimension === "nether"
+        ? { x: Math.floor(world.info.spawn.x / 8), y: 64, z: Math.floor(world.info.spawn.z / 8) }
+        : { x: 100, y: 64, z: 0 };
+  return {
+    name: world.info.name,
+    spawn,
+    revision,
+    ...context,
+    dimensions: Object.values(DIMENSIONS),
+  };
 }
 
 /**
  * Returns a serialized region from memory, the disk cache, or a fresh build.
  * A cancelled request stops a queued build, but never a build already running.
  */
-export function loadRegion(request: RegionRequest, signal: AbortSignal): Promise<LoadedRegion> {
-  const key = `${request.level}/${request.x}/${request.z}`;
+export function loadRegion(
+  request: RegionRequest,
+  signal: AbortSignal,
+  context: SceneContext = sceneContext("overworld", request.ceilingY),
+): Promise<LoadedRegion> {
+  const key = regionCacheKey(context, request);
   const cached = memory.get(key);
   if (cached !== undefined) {
     memory.delete(key);
@@ -59,9 +93,16 @@ export function loadRegion(request: RegionRequest, signal: AbortSignal): Promise
     return cached.then((region) => ({ ...region, cacheStatus: "memory" }));
   }
 
-  const pending = readOrBuild(request, key, signal);
+  const pending = readOrBuild(
+    { ...request, ceilingY: context.ceilingY },
+    key,
+    signal,
+    context.dimension,
+  );
   memory.set(key, pending);
-  void pending.catch(() => memory.delete(key));
+  void pending.catch(() => {
+    if (memory.get(key) === pending) memory.delete(key);
+  });
   while (memory.size > maxMemoryRegions) {
     const oldest = memory.keys().next().value;
     if (oldest === undefined) break;
@@ -74,6 +115,7 @@ async function readOrBuild(
   request: RegionRequest,
   key: string,
   signal: AbortSignal,
+  dimension: Dimension,
 ): Promise<LoadedRegion> {
   const startedAt = performance.now();
   const path = join(cacheDirectory, await getRevision(), `${key}.bin`);
@@ -82,7 +124,7 @@ async function readOrBuild(
     return { bytes: stored, cacheStatus: "disk", milliseconds: performance.now() - startedAt };
   }
 
-  const world = await getSceneWorld();
+  const world = await getSceneWorld(dimension);
   const built = await world.buildRegion(request, signal);
   await writeAtomically(path, built.bytes);
   return { bytes: built.bytes, cacheStatus: "build", milliseconds: built.milliseconds };

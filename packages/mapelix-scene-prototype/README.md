@@ -18,12 +18,38 @@ does not scan the database. Each worker opens the tables by their index blocks a
 the blocks a lookup needs. `buildRegion` accepts an `AbortSignal`, which drops a request that no
 worker has started.
 
+## Dimensions
+
+Pass `dimension: "overworld" | "nether" | "the-end"` to `openSceneWorld`. The default
+is Overworld. Each world instance fixes its dimension, including worker and decoded-chunk
+caches. The reusable `@mapelix/scene-prototype/dimensions` entry has no Node.js dependency.
+
+| Dimension | Block range     | Geometry                                           | Default exclusive mesh ceiling |
+| --------- | --------------- | -------------------------------------------------- | ------------------------------ |
+| Overworld | -64 through 319 | Existing surface visibility and depth optimization | 320                            |
+| Nether    | 0 through 127   | Full interior geometry, including sealed caves     | 96                             |
+| End       | 0 through 255   | Full island geometry, void and undersides          | 256                            |
+
+`buildRegion({ level, x, z, ceilingY })` optionally hides blocks at and above `ceilingY`.
+The ceiling must be a multiple of 16, above the dimension floor and no higher than its
+exclusive upper bound. It is applied before mesh generation and voxel reduction, so all
+six LODs agree. Set the Nether ceiling to 128 to retain the roof.
+
+The format remains version 2. Dimension and ceiling belong to the request/cache context,
+not the binary header: adapters must key regions by world revision, dimension, ceiling,
+level, x and z. The `sceneContext`, `contextSearch` and `regionCacheKey` helpers normalize
+these values. `info.spawn` remains the Overworld spawn stored in `level.dat`; consumers
+choose their own entry points into other dimensions.
+
+See [milestone notes](../../docs/native-dimensions.md) for validation, limitations and the
+Bedrock Control API handoff.
+
 ## Regions
 
 Regions form a quadtree. A level 0 region covers 64 by 64 blocks, and each level up covers twice
 as many blocks on each side, up to 2048 by 2048 at level 5.
 
-- Level 0 is a voxel mesh. Faces between solid blocks and faces in sealed caves are dropped.
+- Level 0 is a voxel mesh. Faces between solid blocks are dropped. Overworld also drops sealed caves.
   Equal faces merge into larger quads, and each corner stores its ambient occlusion. Plants are
   crossed quads. Water and glass are separate translucent quads.
 - Levels 1 to 5 are voxel meshes over 128 by 128 cubic voxels, 1, 2, 4, 8, and 16 blocks wide.
@@ -35,7 +61,7 @@ as many blocks on each side, up to 2048 by 2048 at level 5.
 - Higher levels cull, merge, and shade faces as level 0 does. Walls that face unexplored land
   reach 16 blocks below the highest block, like the cut edge of a diorama. Borders reach under
   their neighbors so regions of different levels meet without gaps.
-- Higher levels read each chunk from the top down to 32 blocks below its ground, or 16 blocks
+- Overworld higher levels read each chunk from the top down to 32 blocks below its ground, or 16 blocks
   for voxels 4 blocks wide and wider, and treat deeper blocks as rock. Ground is the top of at
   least 4 solid blocks, so towers of thin floors and high platforms keep the open air below them.
 
@@ -66,6 +92,10 @@ MAPELIX_WORLD_DIRECTORY=/path/to/world \
 MAPELIX_BENCH_LEVEL=0 MAPELIX_BENCH_RADIUS=1 MAPELIX_BENCH_WORKERS=8 \
 pnpm --filter @mapelix/scene-prototype benchmark
 ```
+
+Set `MAPELIX_BENCH_DIMENSION=nether` and optionally `MAPELIX_BENCH_CEILING_Y=80` to
+measure another dimension or roof cut. Benchmark coordinates are always block coordinates
+in the selected dimension; set `MAPELIX_BENCH_X` and `MAPELIX_BENCH_Z` explicitly.
 
 `MAPELIX_BENCH_X` and `MAPELIX_BENCH_Z` move the center. On the Amelix SMP world with eight
 workers, a cold level 0 region takes about 0.45 s, a level 1 region about 1 s, a level 3 region

@@ -41,6 +41,7 @@ export function buildRegionVolume(
   palette: BlockPalette,
   regionX: number,
   regionZ: number,
+  ceilingY = chunks.config.maxY,
 ): RegionVolume | undefined {
   const originX = regionX * BASE_REGION_SPAN - VOLUME_MARGIN;
   const originZ = regionZ * BASE_REGION_SPAN - VOLUME_MARGIN;
@@ -57,7 +58,7 @@ export function buildRegionVolume(
       regionHasChunks ||= insideRegion;
       loaded[row * CHUNKS_PER_SIDE + column] = chunk;
       for (const section of chunk.sections) {
-        writeSection(cells, palette, section, column * 16, row * 16);
+        if (section.y * 16 < ceilingY) writeSection(cells, palette, section, column * 16, row * 16);
       }
     }
   }
