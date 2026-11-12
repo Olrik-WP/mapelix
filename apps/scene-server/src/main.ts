@@ -2,7 +2,7 @@ import { chmod, lstat, readFile, stat, unlink, writeFile } from "node:fs/promise
 import type { Server } from "node:http";
 import { join } from "node:path";
 
-import { openSceneWorld, type Dimension, type SceneWorld } from "@mapelix/scene-prototype";
+import { openSceneWorld, type Dimension } from "@mapelix/scene-prototype";
 import { MAX_REGION_LEVEL, REGION_FORMAT_VERSION } from "@mapelix/scene-prototype/format";
 
 import {
@@ -16,6 +16,8 @@ import { DiskCache } from "./disk-cache.js";
 import { parseExtent, scanWorldExtent, type WorldExtent } from "./extent.js";
 import { API_VERSION, createSceneServer, type WorldDescription } from "./http-server.js";
 import { log } from "./log.js";
+import { DimensionPools } from "./pools.js";
+import { describeDimension } from "./world-description.js";
 import { Prewarmer, prewarmPlan } from "./prewarm.js";
 import { RegionService } from "./region-service.js";
 import { engineFingerprint, worldRevision } from "./revision.js";
@@ -42,30 +44,22 @@ async function main(): Promise<void> {
   });
   const extent = await loadExtent(config, revision);
 
-  const worlds = new Map<Dimension, Promise<SceneWorld>>();
-  const openWorld = (dimension: Dimension): Promise<SceneWorld> => {
-    let opened = worlds.get(dimension);
-    if (opened === undefined) {
-      opened = openSceneWorld({
-        directory: config.worldDirectory,
-        dimension,
-        workers: config.workers,
-      });
-      worlds.set(dimension, opened);
-      opened.catch(() => worlds.delete(dimension));
-    }
-    return opened;
-  };
+  const pools = new DimensionPools({
+    open: (dimension) =>
+      openSceneWorld({ directory: config.worldDirectory, dimension, workers: config.workers }),
+    permits: config.workers,
+    idleMilliseconds: config.poolIdleSeconds * 1000,
+    onEvent: (event, detail) => log("info", event, detail),
+  });
   // Opening the first dimension now proves the snapshot is readable before listening.
-  const first = await openWorld(config.dimensions[0]!);
+  const first = await pools.world(config.dimensions[0]!);
 
   const bounds = new Map<Dimension, BlockBounds | undefined>(
     config.dimensions.map((dimension) => [dimension, config.bounds ?? extent[dimension]]),
   );
   const regions = new RegionService({
     dimensions: bounds,
-    build: async (dimension, request, signal) =>
-      (await openWorld(dimension)).buildRegion(request, signal),
+    build: (dimension, request, signal) => pools.build(dimension, request, signal),
     store: disk,
     memoryBytes: config.memoryCacheBytes,
     maxPending: config.maxPending,
@@ -79,7 +73,9 @@ async function main(): Promise<void> {
     revision,
     regionFormatVersion: REGION_FORMAT_VERSION,
     maxRegionLevel: MAX_REGION_LEVEL,
-    dimensions: config.dimensions.map((id) => ({ id, bounds: bounds.get(id) ?? null })),
+    dimensions: config.dimensions.map((id) =>
+      describeDimension(id, bounds.get(id), first.info.spawn),
+    ),
   };
   const prewarmer = new Prewarmer(
     regions,
@@ -96,6 +92,7 @@ async function main(): Promise<void> {
     cache: disk.stats,
     prewarm: prewarmer.progress,
     dimensions: config.dimensions,
+    openDimensions: pools.openDimensions,
   });
   const onEvent = (event: string, detail: Record<string, unknown>): void =>
     log("warn", event, detail);
@@ -131,9 +128,7 @@ async function main(): Promise<void> {
       running?.close();
       running?.closeIdleConnections();
     }
-    void Promise.allSettled(
-      [...worlds.values()].map(async (opened) => (await opened).close()),
-    ).then(() => process.exit(0));
+    void pools.close().then(() => process.exit(0));
   };
   process.on("SIGTERM", () => stop("SIGTERM"));
   process.on("SIGINT", () => stop("SIGINT"));

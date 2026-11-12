@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import type { Dimension } from "@mapelix/scene-prototype";
+import { parseDimension } from "@mapelix/scene-prototype/dimensions";
 
 import { DIMENSIONS, type BlockBounds } from "./config.js";
 import {
@@ -12,8 +13,25 @@ import {
   type RegionResult,
 } from "./region-service.js";
 
-/** Bumped whenever a response shape or a route changes incompatibly. */
-export const API_VERSION = 1;
+/**
+ * Bumped whenever a response shape or a route changes incompatibly.
+ * 2: per-dimension profiles in /v1/world and the `ceilingY` region parameter.
+ */
+export const API_VERSION = 2;
+
+export interface DimensionDescription {
+  readonly id: Dimension;
+  readonly label: string;
+  /** Stored blocks, or null when the dimension holds no chunks in this world. */
+  readonly bounds: BlockBounds | null;
+  readonly minY: number;
+  /** Exclusive. */
+  readonly maxY: number;
+  /** Exclusive mesh ceiling used when a request names none, and by the prewarm. */
+  readonly defaultCeilingY: number;
+  /** Where a viewer starts: a navigation default, not a discovered portal or player. */
+  readonly spawn: { readonly x: number; readonly y: number; readonly z: number };
+}
 
 export interface WorldDescription {
   readonly apiVersion: number;
@@ -22,17 +40,18 @@ export interface WorldDescription {
   readonly revision: string;
   readonly regionFormatVersion: number;
   readonly maxRegionLevel: number;
-  readonly dimensions: readonly {
-    readonly id: Dimension;
-    /** Stored blocks, or null when the dimension holds no chunks in this world. */
-    readonly bounds: BlockBounds | null;
-  }[];
+  readonly dimensions: readonly DimensionDescription[];
 }
 
 export interface RegionLoader {
   load(
     dimension: Dimension,
-    request: { readonly level: number; readonly x: number; readonly z: number },
+    request: {
+      readonly level: number;
+      readonly x: number;
+      readonly z: number;
+      readonly ceilingY?: number;
+    },
     signal: AbortSignal,
     options?: LoadOptions,
   ): Promise<RegionResult>;
@@ -88,6 +107,19 @@ export function createSceneHandler(
     if (dimension === undefined || !served.has(dimension)) {
       return sendJson(response, 404, { error: "dimension-not-served" });
     }
+    // The viewer repeats the dimension in the query; it must agree with the path.
+    const named = url.searchParams.get("dimension");
+    let sameDimension = true;
+    try {
+      sameDimension = named === null || parseDimension(named) === dimension;
+    } catch {
+      sameDimension = false;
+    }
+    if (!sameDimension) return sendJson(response, 400, { error: "invalid-context" });
+    const ceilingText = url.searchParams.get("ceilingY");
+    if (ceilingText !== null && !/^\d{1,3}$/.test(ceilingText)) {
+      return sendJson(response, 400, { error: "invalid-context" });
+    }
     const revision = url.searchParams.get("revision");
     if (revision !== null && revision !== options.world.revision) {
       // The client holds a view of an older snapshot and must reload the world.
@@ -101,7 +133,12 @@ export function createSceneHandler(
     response.on("close", () => {
       if (!response.writableFinished) controller.abort();
     });
-    const region = { level: Number(match[2]), x: Number(match[3]), z: Number(match[4]) };
+    const region = {
+      level: Number(match[2]),
+      x: Number(match[3]),
+      z: Number(match[4]),
+      ...(ceilingText === null ? {} : { ceilingY: Number(ceilingText) }),
+    };
     const loadOptions = options.cacheOnly === true ? { cacheOnly: true } : {};
     options.regions.load(dimension, region, controller.signal, loadOptions).then(
       (result) => sendRegion(response, result, revision !== null),

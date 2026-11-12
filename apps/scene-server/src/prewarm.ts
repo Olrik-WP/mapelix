@@ -22,19 +22,21 @@ export interface PrewarmTarget {
 }
 
 /**
- * Every region that touches the stored area, coarse levels first and, within a
- * level, nearest the middle of the world first. A capped plan keeps its coarse
- * levels, so a huge world still gets a complete overview.
+ * Every region that touches the stored area, one dimension after the other in the
+ * order given, coarse levels first and, within a level, nearest the middle of the
+ * world first. A capped plan keeps the first dimension's coarse levels. Jobs carry
+ * no ceiling: each dimension's default one is what visitors ask for first.
  */
 export function prewarmPlan(
   dimensions: ReadonlyMap<Dimension, BlockBounds | undefined>,
   maxRegions: number,
 ): PrewarmJob[] {
   const jobs: PrewarmJob[] = [];
-  for (let level = MAX_REGION_LEVEL; level >= 0; level -= 1) {
-    const span = regionSpan(level);
-    for (const [dimension, bounds] of dimensions) {
-      if (bounds === undefined) continue;
+  // Dimension by dimension, so only one dimension's builders are busy at a time.
+  for (const [dimension, bounds] of dimensions) {
+    if (bounds === undefined) continue;
+    for (let level = MAX_REGION_LEVEL; level >= 0; level -= 1) {
+      const span = regionSpan(level);
       const centerX = (bounds.minX + bounds.maxX) / 2 / span;
       const centerZ = (bounds.minZ + bounds.maxZ) / 2 / span;
       const levelJobs: (PrewarmJob & { distance: number })[] = [];

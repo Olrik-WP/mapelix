@@ -13,7 +13,8 @@ describe("readConfig", () => {
     const config = readConfig(base);
     expect(config.workers).toBe(1);
     expect(config.maxPending).toBe(32);
-    expect(config.dimensions).toEqual(["overworld"]);
+    expect(config.dimensions).toEqual(["overworld", "nether", "the-end"]);
+    expect(config.poolIdleSeconds).toBe(300);
     expect(config.listen).toEqual({ kind: "tcp", host: "127.0.0.1", port: 5180 });
     expect(config.diskCacheBytes).toBe(1024 * 1024 * 1024);
     expect(config.bounds).toBeUndefined();

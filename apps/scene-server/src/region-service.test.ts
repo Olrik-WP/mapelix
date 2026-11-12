@@ -155,9 +155,9 @@ describe("RegionService", () => {
   it("reads valid regions from the store and rebuilds corrupt ones", async () => {
     const builder = controlledBuilder();
     const store = memoryStore();
-    store.files.set("overworld/0/1/1", emptyRegionBytes(0, 1, 1));
-    store.files.set("overworld/0/-2/1", new Uint8Array([1, 2, 3, 4]));
-    store.files.set("overworld/0/1/-2", emptyRegionBytes(0, 9, 9)); // Wrong region inside.
+    store.files.set("overworld/320/0/1/1", emptyRegionBytes(0, 1, 1));
+    store.files.set("overworld/320/0/-2/1", new Uint8Array([1, 2, 3, 4]));
+    store.files.set("overworld/320/0/1/-2", emptyRegionBytes(0, 9, 9)); // Wrong region inside.
     const regions = service(builder.build, store);
     expect((await regions.load("overworld", { level: 0, x: 1, z: 1 }, signal())).cacheStatus).toBe(
       "disk",
@@ -170,14 +170,17 @@ describe("RegionService", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       builder.pending.at(-1)!.resolve();
       expect((await pending).cacheStatus).toBe("build");
-      expect(decodeSceneRegion(store.files.get(`overworld/0/${x}/${z}`)!)).toMatchObject({ x, z });
+      expect(decodeSceneRegion(store.files.get(`overworld/320/0/${x}/${z}`)!)).toMatchObject({
+        x,
+        z,
+      });
     }
   });
 
   it("answers cache-only requests without ever building", async () => {
     const builder = controlledBuilder();
     const store = memoryStore();
-    store.files.set("overworld/0/1/1", emptyRegionBytes(0, 1, 1));
+    store.files.set("overworld/320/0/1/1", emptyRegionBytes(0, 1, 1));
     const regions = service(builder.build, store);
     const options = { cacheOnly: true };
     expect(
@@ -191,6 +194,41 @@ describe("RegionService", () => {
       (await regions.load("overworld", { level: 0, x: 90, z: 90 }, signal(), options)).cacheStatus,
     ).toBe("empty");
     expect(builder.calls).toBe(0);
+  });
+
+  it("keys every cache layer by ceiling and builds with the resolved ceiling", async () => {
+    const builder = controlledBuilder();
+    const store = memoryStore();
+    const regions = new RegionService({
+      dimensions: new Map<Dimension, typeof WORLD | undefined>([["nether", WORLD]]),
+      build: builder.build,
+      store,
+      memoryBytes: 1024 * 1024,
+      maxPending: 4,
+    });
+    const roofless = regions.load("nether", { level: 0, x: 0, z: 0 }, signal());
+    const roofed = regions.load("nether", { level: 0, x: 0, z: 0, ceilingY: 128 }, signal());
+    await tick();
+    expect(builder.calls).toBe(2);
+    expect(
+      builder.pending.map((entry) => entry.request.ceilingY).sort((a, b) => (a ?? 0) - (b ?? 0)),
+    ).toEqual([96, 128]);
+    for (const entry of builder.pending) entry.resolve();
+    await Promise.all([roofless, roofed]);
+    expect([...store.files.keys()].sort()).toEqual(["nether/128/0/0/0", "nether/96/0/0/0"]);
+    // The explicit default ceiling is the same region as no ceiling at all.
+    const again = await regions.load("nether", { level: 0, x: 0, z: 0, ceilingY: 96 }, signal());
+    expect(again.cacheStatus).toBe("memory");
+    expect(builder.calls).toBe(2);
+  });
+
+  it("refuses ceilings the engine does not accept", async () => {
+    const regions = service(controlledBuilder().build);
+    for (const ceilingY of [100, -64, 336, 8]) {
+      await expect(
+        regions.load("overworld", { level: 0, x: 0, z: 0, ceilingY }, signal()),
+      ).rejects.toBeInstanceOf(InvalidRegionError);
+    }
   });
 
   it("keeps memory under its byte budget", async () => {

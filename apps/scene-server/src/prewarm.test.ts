@@ -24,6 +24,21 @@ describe("prewarmPlan", () => {
     expect(plan.every((job) => job.dimension === "overworld")).toBe(true);
   });
 
+  it("finishes one dimension before the next", () => {
+    const area = { minX: -10, minZ: -10, maxX: 10, maxZ: 10 };
+    const plan = prewarmPlan(
+      new Map<Dimension, typeof area | undefined>([
+        ["overworld", area],
+        ["nether", area],
+      ]),
+      1000,
+    );
+    const dimensions = plan.map((job) => job.dimension);
+    expect(dimensions.indexOf("nether")).toBe(dimensions.lastIndexOf("overworld") + 1);
+    expect(plan.find((job) => job.dimension === "nether")?.level).toBe(5);
+    expect(plan.every((job) => job.ceilingY === undefined)).toBe(true);
+  });
+
   it("keeps the coarse levels when capped", () => {
     const plan = prewarmPlan(WORLD, 5);
     expect(plan).toHaveLength(5);

@@ -22,8 +22,10 @@ export interface ServerConfig {
   readonly cacheDirectory: string;
   readonly listen: ListenTarget;
   readonly dimensions: readonly Dimension[];
-  /** Region builder threads per opened dimension. */
+  /** Region builder threads per opened dimension, and builds at once across all of them. */
   readonly workers: number;
+  /** A dimension's builder threads close after this long without a build; 0 keeps them. */
+  readonly poolIdleSeconds: number;
   /** Distinct region builds that may be queued or running at once. */
   readonly maxPending: number;
   readonly memoryCacheBytes: number;
@@ -65,8 +67,9 @@ export function readConfig(env: Environment): ServerConfig {
     worldDirectory,
     cacheDirectory,
     listen: parseListen(env.MAPELIX_LISTEN ?? "tcp:127.0.0.1:5180", env.MAPELIX_SOCKET_MODE),
-    dimensions: parseDimensions(env.MAPELIX_DIMENSIONS ?? "overworld"),
+    dimensions: parseDimensions(env.MAPELIX_DIMENSIONS ?? DIMENSIONS.join(",")),
     workers: integer(env, "MAPELIX_SCENE_WORKERS", 1, 1, 16),
+    poolIdleSeconds: integer(env, "MAPELIX_POOL_IDLE_SECONDS", 300, 0, 86_400),
     maxPending: integer(env, "MAPELIX_MAX_PENDING", 32, 1, 1024),
     memoryCacheBytes: integer(env, "MAPELIX_MEMORY_CACHE_MB", 64, 0, 4096) * MIB,
     diskCacheBytes: integer(env, "MAPELIX_CACHE_MAX_MB", 1024, 16, 1024 * 1024) * MIB,

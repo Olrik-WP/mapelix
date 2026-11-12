@@ -1,5 +1,10 @@
 import type { Dimension, RegionRequest } from "@mapelix/scene-prototype";
 import {
+  regionCacheKey,
+  sceneContext,
+  type SceneContext,
+} from "@mapelix/scene-prototype/dimensions";
+import {
   EMPTY_HEIGHT,
   MAX_REGION_LEVEL,
   decodeSceneRegion,
@@ -24,9 +29,10 @@ export interface BuiltBytes {
   readonly milliseconds: number;
 }
 
+/** The request handed to a build always carries its resolved ceiling. */
 export type BuildRegion = (
   dimension: Dimension,
-  request: RegionRequest,
+  request: RegionRequest & { readonly ceilingY: number },
   signal: AbortSignal,
 ) => Promise<BuiltBytes>;
 
@@ -125,6 +131,7 @@ export class RegionService {
       throw new InvalidRegionError(`Dimension ${dimension} is not served`);
     }
     validateRegion(level, x, z);
+    const context = resolveContext(dimension, request.ceilingY);
     const bounds = this.options.dimensions.get(dimension);
     if (bounds === undefined || !regionTouches(bounds, regionSpan(level), x, z)) {
       return {
@@ -134,7 +141,8 @@ export class RegionService {
       };
     }
 
-    const key = `${dimension}/${level}/${x}/${z}`;
+    // Each ceiling cuts the geometry differently, so it is part of every cache key.
+    const key = regionCacheKey(context, { level, x, z });
     const remembered = this.memory.get(key);
     if (remembered !== undefined) {
       this.memory.delete(key);
@@ -161,7 +169,12 @@ export class RegionService {
         throw new OverloadedError("Too many regions are being built; retry shortly");
       }
       const controller = new AbortController();
-      const promise = this.readOrBuild(key, dimension, request, controller.signal);
+      const promise = this.readOrBuild(
+        key,
+        dimension,
+        { level, x, z, ceilingY: context.ceilingY },
+        controller.signal,
+      );
       flight = { controller, promise, waiters: 0 };
       this.inFlight.set(key, flight);
       const settled = flight;
@@ -204,7 +217,7 @@ export class RegionService {
   private async readOrBuild(
     key: string,
     dimension: Dimension,
-    request: RegionRequest,
+    request: RegionRequest & { readonly ceilingY: number },
     signal: AbortSignal,
   ): Promise<RegionResult> {
     const startedAt = performance.now();
@@ -259,6 +272,15 @@ export class RegionService {
       this.memory.delete(oldest);
       this.memoryBytes -= value.byteLength;
     }
+  }
+}
+
+/** The dimension's default ceiling, or a requested one the engine accepts. */
+export function resolveContext(dimension: Dimension, ceilingY: number | undefined): SceneContext {
+  try {
+    return sceneContext(dimension, ceilingY);
+  } catch (cause) {
+    throw new InvalidRegionError(cause instanceof Error ? cause.message : String(cause));
   }
 }
 

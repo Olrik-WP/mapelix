@@ -110,7 +110,13 @@ describe("scene server process", () => {
     });
     try {
       const description = JSON.parse((await get(target, "/v1/world")).body.toString());
-      expect(description.apiVersion).toBe(1);
+      expect(description.apiVersion).toBe(2);
+      expect(description.dimensions.map((entry: { id: string }) => entry.id)).toEqual([
+        "overworld",
+        "nether",
+        "the-end",
+      ]);
+      expect(description.dimensions[1]).toMatchObject({ defaultCeilingY: 96, maxY: 128 });
       expect(description.revision).toMatch(/^[0-9a-f]{20}$/);
       expect(JSON.stringify(description)).not.toContain(work.replaceAll("\\", "\\\\"));
       const bounds = description.dimensions[0].bounds;
@@ -126,10 +132,26 @@ describe("scene server process", () => {
       expect(built.headers["cache-control"]).toContain("immutable");
       expect(decodeSceneRegion(new Uint8Array(built.body))).toMatchObject({ level: 0, x, z });
       expect((await get(target, path)).headers["x-mapelix-cache"]).toBe("memory");
+      // The viewer's own query: same region, same cache entry.
+      const withContext = `/v1/dimensions/overworld/regions/0/${x}/${z}?dimension=overworld&ceilingY=320&revision=${description.revision}`;
+      expect((await get(target, withContext)).headers["x-mapelix-cache"]).toBe("memory");
+      // Another ceiling is another region.
+      const lower = `/v1/dimensions/overworld/regions/0/${x}/${z}?ceilingY=64`;
+      expect((await get(target, lower)).headers["x-mapelix-cache"]).toBe("build");
+      for (const query of ["ceilingY=100", "ceilingY=abc", "ceilingY=1600", "dimension=nether"]) {
+        const refused = await get(target, `/v1/dimensions/overworld/regions/0/${x}/${z}?${query}`);
+        expect(refused.status, query).toBe(400);
+      }
 
       const far = await get(target, "/v1/dimensions/overworld/regions/0/100000/100000");
       expect(far.headers["x-mapelix-cache"]).toBe("empty");
-      expect((await get(target, "/v1/dimensions/nether/regions/0/0/0")).status).toBe(404);
+      // The fixture stores no Nether: its regions are empty, never built.
+      const nether = await get(target, "/v1/dimensions/nether/regions/0/0/0?ceilingY=128");
+      expect(nether.headers["x-mapelix-cache"]).toBe("empty");
+      expect((await get(target, "/v1/dimensions/nether/regions/0/0/0?ceilingY=320")).status).toBe(
+        400,
+      );
+      expect((await get(target, "/v1/dimensions/the-sky/regions/0/0/0")).status).toBe(404);
       expect((await get(target, "/v1/dimensions/overworld/regions/7/0/0")).status).toBe(400);
       expect((await get(target, "/v1/dimensions/overworld/regions/0/0/0?revision=0")).status).toBe(
         409,
@@ -138,7 +160,8 @@ describe("scene server process", () => {
       expect((await get(target, "/v1/../../etc/passwd")).status).toBe(404);
 
       const health = JSON.parse((await get(target, "/v1/health")).body.toString());
-      expect(health).toMatchObject({ status: "ok", builds: { built: 1 }, cache: { entries: 1 } });
+      expect(health).toMatchObject({ status: "ok", builds: { built: 2 }, cache: { entries: 2 } });
+      expect(health.openDimensions).toEqual(["overworld"]);
     } finally {
       server.child.kill("SIGTERM");
     }
@@ -155,7 +178,7 @@ describe("scene server process", () => {
     try {
       expect(again.output()).not.toContain("world.extent-scanned");
       const health = JSON.parse((await get(target, "/v1/health")).body.toString());
-      expect(health.cache.entries).toBe(1);
+      expect(health.cache.entries).toBe(2);
     } finally {
       again.child.kill("SIGTERM");
       await again.exited;
