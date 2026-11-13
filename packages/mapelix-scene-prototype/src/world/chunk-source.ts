@@ -69,6 +69,8 @@ export class ChunkSource {
   private readonly dimension: number;
   private readonly decoded = new Map<string, DecodedChunk | undefined>();
   private readonly maxDecodedChunks: number;
+  /** Shared across cave depths: bounded by source section, never by window variants. */
+  private readonly decodedSections = new Map<string, DecodedSubchunk | undefined>();
 
   constructor(
     database: Pick<WorldDatabase, "readPrefix">,
@@ -149,6 +151,27 @@ export class ChunkSource {
       if (oldest !== undefined) this.decoded.delete(oldest);
     }
     return chunk;
+  }
+
+  /** Decodes only source sections touching a padded cave window. The world is a fixed snapshot. */
+  chunkRange(chunkX: number, chunkZ: number, minY: number, maxY: number): DecodedChunk | undefined {
+    const records = this.records(chunkX, chunkZ);
+    if (records === undefined) return undefined;
+    const sections: DecodedSubchunk[] = [];
+    for (const record of records.sections) {
+      if (record.y * 16 < minY || record.y * 16 >= maxY) continue;
+      const key = `${chunkX},${chunkZ},${record.y}`;
+      let section = this.decodedSections.get(key);
+      if (!this.decodedSections.has(key)) section = decodeSection(record);
+      this.decodedSections.delete(key);
+      this.decodedSections.set(key, section);
+      if (this.decodedSections.size > 256) {
+        this.decodedSections.delete(this.decodedSections.keys().next().value!);
+      }
+      if (section !== undefined) sections.push(section);
+    }
+    sections.sort((a, b) => a.y - b.y);
+    return { ...records, sections };
   }
 
   private prefix(chunkX: number, chunkZ: number): Uint8Array {

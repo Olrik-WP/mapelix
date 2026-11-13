@@ -13,27 +13,49 @@ import {
 } from "three/webgpu";
 import { bloom } from "three/addons/tsl/display/BloomNode.js";
 import { normalWorldGeometry, pass } from "three/tsl";
+import { retainScreenUniforms } from "./shaders/stable-screen";
+import { createStablePCFFilter } from "./shaders/shadow-filter";
+import { SelectionBox, type SelectionTool, type SelectionChange } from "./selection-box";
+import { horizontalSelection, type HorizontalSelection } from "@mapelix/scene-prototype/selection";
+import { DiscoveryStreamer, type DiscoveryStats } from "./discovery-streamer";
+import type { DiscoveryFilters, DiscoveryGroup } from "@mapelix/scene-prototype/discoveries";
 
 import { Atmosphere } from "./atmosphere";
 import { CameraRig, ZOOM_LIMIT, pointerRay, type CameraView } from "./camera-rig";
 import { RegionStreamer, type StreamingStats } from "./region-streamer";
+import { RegionMeshPool } from "./region-mesh";
 import { createSceneMaterials, type SceneMaterials } from "./shaders/materials";
-import { DIMENSIONS, type SceneContext } from "@mapelix/scene-prototype/dimensions";
+import {
+  CAVE_LIMITS,
+  DIMENSIONS,
+  sceneContext,
+  type SceneContext,
+  type SceneContextInput,
+} from "@mapelix/scene-prototype/dimensions";
 
-export interface WorldInfo extends SceneContext {
+export interface WorldInfo extends SceneContextInput {
   readonly name: string;
   readonly spawn: { readonly x: number; readonly y: number; readonly z: number };
   readonly revision: string;
+  readonly snapshotRevision?: string;
+  readonly discoveries?: { readonly schemaVersion: number; readonly tileSpan: number };
 }
 
 export type { CameraView } from "./camera-rig";
 
-/** How the viewer reaches its region server. */
+/** Kept across view switches so embedding does not fall back to a different server. */
 export interface WorldViewerOptions {
-  /** Path the region requests start with, without a trailing slash. Defaults to `/regions`. */
   readonly regionBase?: string;
-  /** Added after `{level}/{x}/{z}`, such as `.bin` for caches that key on file extensions. */
   readonly regionSuffix?: string;
+  readonly caveViewDistance?: number;
+  readonly caveMemoryBudget?: number;
+  readonly selection?: HorizontalSelection;
+  readonly onSelectionChange?: (change: SelectionChange) => void;
+  readonly discoveryBase?: string;
+  readonly discoverySuffix?: string;
+  readonly discoveryMemoryBudget?: number;
+  readonly discoveryFilters?: DiscoveryFilters;
+  readonly onDiscoverySelect?: (discovery: DiscoveryGroup) => void;
 }
 
 export interface ViewerSnapshot {
@@ -41,6 +63,9 @@ export interface ViewerSnapshot {
   readonly framesPerSecond: number;
   readonly view: CameraView;
   readonly streaming: StreamingStats;
+  readonly context: SceneContext;
+  readonly selection: HorizontalSelection | undefined;
+  readonly discoveries: DiscoveryStats;
 }
 
 export interface Pointed {
@@ -73,8 +98,11 @@ export class WorldViewer {
   private readonly sky = new HemisphereLight(0xb9d3ec, 0x8a7a62, 1.4);
   private streamer: RegionStreamer;
   private readonly materials: SceneMaterials;
-  /** Kept so a replacement streamer reaches the same region server. */
+  private readonly meshPool = new RegionMeshPool();
   private readonly options: WorldViewerOptions;
+  private readonly selectionBox: SelectionBox;
+  private readonly selections = new Map<string, HorizontalSelection>();
+  private readonly discoveries: DiscoveryStreamer;
   private context: SceneContext;
   private hour = 15.5;
   private readonly rig: CameraRig;
@@ -97,39 +125,70 @@ export class WorldViewer {
     options: WorldViewerOptions,
   ) {
     this.container = container;
-    this.context = world;
+    this.context = sceneContext(world.dimension, world);
+    this.options = options;
     this.atmosphere.setDimension(world.dimension);
+    this.atmosphere.setCaves(this.context.mode === "caves");
     this.renderer = renderer;
     container.append(renderer.domElement);
 
-    this.options = options;
-    this.materials = createSceneMaterials(this.atmosphere);
+    retainScreenUniforms();
+    this.selectionBox = new SelectionBox(
+      this.camera,
+      renderer.domElement,
+      this.context,
+      (change) => {
+        this.setSelection(change.selection);
+        this.options.onSelectionChange?.(change);
+      },
+      (dragging) => this.rig?.setEnabled(!dragging),
+    );
+    this.materials = createSceneMaterials(this.atmosphere, this.selectionBox.mask);
     this.streamer = this.createStreamer(world);
-    this.scene.add(this.streamer.root, this.sky, this.sun, this.sun.target);
+    this.scene.add(this.streamer.root, this.sky, this.sun, this.sun.target, this.selectionBox.root);
     this.scene.backgroundNode = this.atmosphere.sky(normalWorldGeometry);
     this.scene.fogNode = this.atmosphere.fogNode;
 
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
     this.sun.shadow.autoUpdate = false;
+    // Public WebGPU LightShadow hook omitted by Three's shared shadow typings.
+    Object.assign(this.sun.shadow, { filterNode: createStablePCFFilter(this.sun.shadow) });
 
     this.rig = new CameraRig(this.camera, renderer.domElement, {
-      heightAt: (x, z) => this.streamer.heightAt(x, z),
+      heightAt: (x, z) =>
+        this.context.mode === "caves" ? undefined : this.streamer.heightAt(x, z),
       raycast: (origin, direction, far, radius) =>
         this.streamer.raycast(origin, direction, far, radius),
     });
+    this.rig.setVerticalWindow(this.context.mode === "caves" ? this.context : undefined);
+    this.discoveries = new DiscoveryStreamer(container, {
+      ...(options.discoveryBase === undefined ? {} : { base: options.discoveryBase }),
+      ...(options.discoverySuffix === undefined ? {} : { suffix: options.discoverySuffix }),
+      ...(options.discoveryMemoryBudget === undefined
+        ? {}
+        : { memoryBudget: options.discoveryMemoryBudget }),
+      onselect: (group) =>
+        options.onDiscoverySelect ? options.onDiscoverySelect(group) : this.focusOn(group),
+    });
+    this.discoveries.setWorld(world);
+    if (options.discoveryFilters) this.discoveries.setFilters(options.discoveryFilters);
     this.rig.setView(
       {
         x: world.spawn.x,
-        y: world.spawn.y,
+        y:
+          this.context.mode === "caves"
+            ? (this.context.minY + this.context.maxY) / 2
+            : world.spawn.y,
         z: world.spawn.z,
-        distance: world.dimension === "nether" ? 80 : 160,
+        distance: this.context.mode === "caves" || world.dimension === "nether" ? 80 : 160,
         heading: MathUtils.degToRad(35),
         pitch: MathUtils.degToRad(42),
         ...start,
       },
-      { settle: start.y === undefined },
+      { settle: this.context.mode !== "caves" && start.y === undefined },
     );
+    this.setSelection(options.selection);
 
     // Only very bright light blooms: the sun, glints on water, and lamps after dark.
     const color = pass(this.scene, this.camera, { samples: 4 }).getTextureNode("output");
@@ -151,6 +210,16 @@ export class WorldViewer {
     start: Partial<CameraView> = {},
     options: WorldViewerOptions = {},
   ): Promise<WorldViewer> {
+    if (options.selection) horizontalSelection(options.selection);
+    if (
+      options.discoveryMemoryBudget !== undefined &&
+      (!Number.isFinite(options.discoveryMemoryBudget) || options.discoveryMemoryBudget < 32)
+    )
+      throw new RangeError("Discovery memory budget must be at least 32 bytes");
+    for (const value of [options.caveViewDistance, options.caveMemoryBudget]) {
+      if (value !== undefined && (!Number.isFinite(value) || value <= 0))
+        throw new RangeError("Cave budgets must be positive");
+    }
     const renderer = new WebGPURenderer({
       antialias: false,
       powerPreference: "high-performance",
@@ -182,6 +251,9 @@ export class WorldViewer {
         pitch: this.rig.pitch,
       },
       streaming: this.streamer.stats,
+      context: this.context,
+      selection: this.selections.get(this.context.dimension),
+      discoveries: this.discoveries.stats,
     };
   }
 
@@ -204,36 +276,52 @@ export class WorldViewer {
     const previous = this.snapshot().view;
     this.scene.remove(this.streamer.root);
     this.streamer.dispose();
-    this.context = world;
+    this.context = sceneContext(world.dimension, world);
+    this.discoveries.setWorld(world);
     this.streamer = this.createStreamer(world);
     this.scene.add(this.streamer.root);
     this.atmosphere.setDimension(world.dimension);
+    this.atmosphere.setCaves(this.context.mode === "caves");
     this.setTimeOfDay(this.hour);
+    this.rig.setVerticalWindow(this.context.mode === "caves" ? this.context : undefined);
     this.rig.setView(
       {
         ...previous,
         ...(keepView ? {} : { ...world.spawn, distance: world.dimension === "nether" ? 80 : 160 }),
+        ...(this.context.mode === "caves"
+          ? {
+              y: (this.context.minY + this.context.maxY) / 2,
+              distance: Math.min(previous.distance, 80),
+            }
+          : {}),
       },
-      { settle: true },
+      { settle: this.context.mode !== "caves" },
     );
+    this.setSelection(this.selections.get(this.context.dimension));
     this.regionsChanged = true;
     this.fitViewDistance();
   }
 
   private createStreamer(world: WorldInfo): RegionStreamer {
+    const caves = this.context.mode === "caves";
     return new RegionStreamer({
-      context: world,
+      context: this.context,
       revision: world.revision,
       ...(this.options.regionBase === undefined ? {} : { regionBase: this.options.regionBase }),
       ...(this.options.regionSuffix === undefined
         ? {}
         : { regionSuffix: this.options.regionSuffix }),
+      meshPool: this.meshPool,
       materials: this.materials,
       voxelPixels: 2.2,
       blockPixels: 4.4,
-      viewDistance: this.atmosphere.viewDistance.value,
-      maxRequests: 10,
-      memoryBudget: 1024 * 1024 * 1024,
+      viewDistance: caves
+        ? (this.options.caveViewDistance ?? CAVE_LIMITS.viewDistance)
+        : this.atmosphere.viewDistance.value,
+      maxRequests: caves ? 2 : 10,
+      memoryBudget: caves
+        ? (this.options.caveMemoryBudget ?? CAVE_LIMITS.memoryBudget)
+        : 1024 * 1024 * 1024,
       onRegion: () => {
         this.regionsChanged = true;
       },
@@ -264,6 +352,32 @@ export class WorldViewer {
     this.rig.flyTo(x, z);
   }
 
+  /** Local view state only: no new terrain requests/cache variants for clip bounds. */
+  setSelection(input: HorizontalSelection | undefined): void {
+    const selection = input === undefined ? undefined : horizontalSelection(input);
+    if (selection) this.selections.set(this.context.dimension, selection);
+    else this.selections.delete(this.context.dimension);
+    this.selectionBox.set(selection, this.context);
+    this.streamer.setSelection(this.context.mode === "caves" ? selection : undefined);
+    this.discoveries.setSelection(this.context.mode === "caves" ? selection : undefined);
+    this.regionsChanged = true;
+  }
+
+  setSelectionTool(tool: SelectionTool): void {
+    this.selectionBox.setTool(tool);
+  }
+
+  setDiscoveryFilters(filters: DiscoveryFilters): void {
+    this.discoveries.setFilters(filters);
+  }
+
+  /** Focus a known block without settling onto the surface above it. */
+  focusOn(point: Pointed): void {
+    this.rig.setView({ ...this.snapshot().view, ...point }, { settle: false });
+    this.fitViewDistance();
+    this.regionsChanged = true;
+  }
+
   zoom(factor: number): void {
     this.rig.zoom(factor);
   }
@@ -287,7 +401,10 @@ export class WorldViewer {
     this.renderer.setAnimationLoop(null);
     this.resizeObserver.disconnect();
     this.rig.dispose();
+    this.selectionBox.dispose();
+    this.discoveries.dispose();
     this.streamer.dispose();
+    this.meshPool.dispose();
     this.pipeline.dispose();
     for (const pair of Object.values(this.materials)) {
       pair.steady.dispose();
@@ -308,6 +425,13 @@ export class WorldViewer {
       this.streamer.update(this.camera, this.renderer.domElement.height);
     }
     if (this.streamer.animate(performance.now())) this.regionsChanged = true;
+    const terrain = this.streamer.stats;
+    this.discoveries.update(
+      this.camera,
+      this.rig.focus,
+      terrain.loading === 0 && terrain.remaining === 0,
+      this.renderer.domElement,
+    );
     this.updateShadow();
     this.regionsChanged = false;
     this.pipeline.render();
@@ -321,17 +445,25 @@ export class WorldViewer {
     const beyond = Math.max(0, zoom - ZOOM_LIMIT) * 3;
     const wanted = MathUtils.clamp(1400 + zoom * 3, 1600, 6000) + beyond;
     const distance = Math.round(Math.min(wanted, AUTO_VIEW_LIMIT) / 200) * 200;
-    const reach = this.renderDistance ?? distance;
+    const caves = this.context.mode === "caves";
+    const caveReach = Math.min(
+      this.options.caveViewDistance ?? CAVE_LIMITS.viewDistance,
+      CAVE_LIMITS.viewDistance,
+    );
+    const reach = caves
+      ? Math.min(this.renderDistance ?? caveReach, caveReach)
+      : (this.renderDistance ?? distance);
     this.streamer.setViewDistance(reach);
     this.atmosphere.viewDistance.value = reach;
-    this.atmosphere.hazeDistance.value =
-      this.context.dimension === "overworld"
+    this.atmosphere.hazeDistance.value = caves
+      ? 300
+      : this.context.dimension === "overworld"
         ? distance
         : DIMENSIONS[this.context.dimension].atmosphere.hazeDistance;
     // Far from the world, a farther near plane keeps the depth buffer precise.
     this.camera.near = MathUtils.clamp(zoom / 400, 1, 50);
     // Regions start within reach, and their far corners can lie a few thousand blocks beyond.
-    this.camera.far = reach * 1.2 + 4000;
+    this.camera.far = reach * 1.2 + (caves ? 256 : 4000);
     this.camera.updateProjectionMatrix();
   }
 

@@ -1,29 +1,30 @@
 import { createHash, randomUUID } from "node:crypto";
-import { availableParallelism } from "node:os";
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import { openSceneWorld, type RegionRequest, type SceneWorld } from "@mapelix/scene-prototype";
 import { REGION_FORMAT_VERSION } from "@mapelix/scene-prototype/format";
+import { DISCOVERY_LIMITS } from "@mapelix/scene-prototype/discoveries";
 import {
   DIMENSIONS,
+  CAVE_LIMITS,
   regionCacheKey,
   sceneContext,
   type Dimension,
   type DimensionConfig,
   type SceneContext,
+  type SceneContextInput,
 } from "@mapelix/scene-prototype/dimensions";
 
 const worldDirectory =
   process.env.MAPELIX_WORLD_DIRECTORY ??
   resolve(process.cwd(), "../../.local/worlds/Amelix-8-12-26/Amelix SMP");
 const cacheDirectory = process.env.MAPELIX_CACHE_DIRECTORY ?? "/tmp/mapelix-scene-cache";
-const workers = positiveInteger(
-  process.env.MAPELIX_SCENE_WORKERS ?? String(Math.min(8, Math.max(2, availableParallelism() - 2))),
-);
+const workers = positiveInteger(process.env.MAPELIX_SCENE_WORKERS ?? "1");
 /** Bump when mesh output changes without a format change, so stale disk caches are ignored. */
 const meshRevision = 23;
 const maxMemoryRegions = 384;
+const caveMemoryBudget = positiveInteger(process.env.MAPELIX_CAVE_MEMORY_MIB ?? "16") * 1024 * 1024;
 
 export type CacheStatus = "memory" | "disk" | "build";
 
@@ -33,7 +34,7 @@ export interface LoadedRegion {
   readonly milliseconds: number;
 }
 
-export interface WorldMetadata {
+export interface WorldMetadata extends SceneContext {
   readonly dimension: Dimension;
   readonly ceilingY: number;
   readonly dimensions: readonly DimensionConfig[];
@@ -41,11 +42,19 @@ export interface WorldMetadata {
   readonly spawn: { readonly x: number; readonly y: number; readonly z: number };
   /** Changes whenever the world files or the mesh output change. */
   readonly revision: string;
+  readonly caves: typeof CAVE_LIMITS;
+  readonly snapshotRevision: string;
+  readonly discoveries: typeof DISCOVERY_LIMITS;
 }
 
 const worlds = new Map<Dimension, Promise<SceneWorld>>();
-let revisionPromise: Promise<string> | undefined;
+let fingerprintPromise: Promise<{ terrain: string; snapshot: string }> | undefined;
 const memory = new Map<string, Promise<LoadedRegion>>();
+// Local caves are memory-only: exploring depths cannot create unbounded disk variants.
+// Production disk quotas and revision cleanup belong to the scene-server adapter.
+const caveMemory = new Map<string, LoadedRegion>();
+const cavePending = new Map<string, Promise<LoadedRegion>>();
+let caveBytes = 0;
 
 export function getSceneWorld(dimension: Dimension = "overworld"): Promise<SceneWorld> {
   let pending = worlds.get(dimension);
@@ -58,8 +67,9 @@ export function getSceneWorld(dimension: Dimension = "overworld"): Promise<Scene
 }
 
 export async function getWorldMetadata(
-  context: SceneContext = sceneContext(),
+  input: SceneContextInput = sceneContext(),
 ): Promise<WorldMetadata> {
+  const context = sceneContext(input.dimension, input);
   const [world, revision] = await Promise.all([getSceneWorld(context.dimension), getRevision()]);
   const spawn =
     context.dimension === "overworld"
@@ -69,10 +79,13 @@ export async function getWorldMetadata(
         : { x: 100, y: 64, z: 0 };
   return {
     name: world.info.name,
-    spawn,
+    spawn: context.mode === "caves" ? { ...spawn, y: (context.minY + context.maxY) / 2 } : spawn,
     revision,
     ...context,
     dimensions: Object.values(DIMENSIONS),
+    caves: CAVE_LIMITS,
+    snapshotRevision: await getSnapshotRevision(),
+    discoveries: DISCOVERY_LIMITS,
   };
 }
 
@@ -83,9 +96,45 @@ export async function getWorldMetadata(
 export function loadRegion(
   request: RegionRequest,
   signal: AbortSignal,
-  context: SceneContext = sceneContext("overworld", request.ceilingY),
+  input: SceneContextInput = sceneContext("overworld", request),
 ): Promise<LoadedRegion> {
+  const context = sceneContext(input.dimension, input);
   const key = regionCacheKey(context, request);
+  if (context.mode === "caves") {
+    if (
+      !Number.isInteger(request.level) ||
+      request.level < 0 ||
+      request.level > CAVE_LIMITS.maxLevel
+    ) {
+      throw new RangeError(`Caves support LOD 0 through ${CAVE_LIMITS.maxLevel}`);
+    }
+    const cached = caveMemory.get(key);
+    if (cached !== undefined) {
+      caveMemory.delete(key);
+      caveMemory.set(key, cached);
+      return Promise.resolve({ ...cached, cacheStatus: "memory" });
+    }
+    const active = cavePending.get(key);
+    if (active !== undefined) return active;
+    const pending = getSceneWorld(context.dimension)
+      .then((world) => world.buildRegion({ ...request, ...context }, signal))
+      .then((built) => {
+        const region: LoadedRegion = { ...built, cacheStatus: "build" };
+        if (region.bytes.byteLength <= caveMemoryBudget) {
+          caveMemory.set(key, region);
+          caveBytes += region.bytes.byteLength;
+          while (caveBytes > caveMemoryBudget) {
+            const oldest = caveMemory.keys().next().value!;
+            caveBytes -= caveMemory.get(oldest)!.bytes.byteLength;
+            caveMemory.delete(oldest);
+          }
+        }
+        return region;
+      })
+      .finally(() => cavePending.delete(key));
+    cavePending.set(key, pending);
+    return pending;
+  }
   const cached = memory.get(key);
   if (cached !== undefined) {
     memory.delete(key);
@@ -130,15 +179,22 @@ async function readOrBuild(
   return { bytes: built.bytes, cacheStatus: "build", milliseconds: built.milliseconds };
 }
 
-function getRevision(): Promise<string> {
-  revisionPromise ??= fingerprintWorld();
-  return revisionPromise;
+async function getRevision(): Promise<string> {
+  fingerprintPromise ??= fingerprintWorld();
+  return (await fingerprintPromise).terrain;
+}
+
+export async function getSnapshotRevision(): Promise<string> {
+  fingerprintPromise ??= fingerprintWorld();
+  return (await fingerprintPromise).snapshot;
 }
 
 /** Hashes table names, sizes, and modification times. Reading the tables is not needed. */
-async function fingerprintWorld(): Promise<string> {
+async function fingerprintWorld(): Promise<{ terrain: string; snapshot: string }> {
   const hash = createHash("sha256");
+  const snapshot = createHash("sha256");
   hash.update(`scene-v${REGION_FORMAT_VERSION}-mesh-v${meshRevision}\0${worldDirectory}\0`);
+  snapshot.update(`snapshot-v1\0${worldDirectory}\0`);
   const database = join(worldDirectory, "db");
   const names = (await readdir(database))
     .filter((name) => /\.(?:ldb|sst|log)$/i.test(name))
@@ -146,8 +202,12 @@ async function fingerprintWorld(): Promise<string> {
   for (const name of names) {
     const details = await stat(join(database, name), { bigint: true });
     hash.update(`${name}\0${details.size}\0${details.mtimeNs}\n`);
+    snapshot.update(`${name}\0${details.size}\0${details.mtimeNs}\n`);
   }
-  return hash.digest("hex").slice(0, 20);
+  return {
+    terrain: hash.digest("hex").slice(0, 20),
+    snapshot: snapshot.digest("hex").slice(0, 20),
+  };
 }
 
 async function writeAtomically(path: string, bytes: Uint8Array): Promise<void> {

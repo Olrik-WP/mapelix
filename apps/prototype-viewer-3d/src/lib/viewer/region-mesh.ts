@@ -29,6 +29,45 @@ interface Layer {
   readonly materials: MaterialPair;
 }
 
+/** Renderer-owned, bounded shell reuse. Old region arrays and geometry buffers are released. */
+export class RegionMeshPool {
+  private readonly pools = new Map<MaterialPair, Mesh[]>();
+  constructor(private readonly capacity = 64) {}
+
+  acquire(materials: MaterialPair, geometry: InstancedBufferGeometry): Mesh {
+    const mesh = this.pools.get(materials)?.pop();
+    if (mesh === undefined) return new Mesh(geometry, materials.steady);
+    mesh.geometry = geometry;
+    mesh.material = materials.steady;
+    return mesh;
+  }
+
+  release(mesh: Mesh, materials: MaterialPair): void {
+    mesh.geometry.dispose();
+    // A disposed geometry can still retain its typed array through a cached render object.
+    const quads = mesh.geometry.getAttribute("quad") as InstancedBufferAttribute;
+    quads.array = new Uint32Array(0);
+    let pool = this.pools.get(materials);
+    if (pool === undefined) {
+      pool = [];
+      this.pools.set(materials, pool);
+    }
+    if (pool.length < this.capacity) pool.push(mesh);
+    else mesh.dispose();
+  }
+
+  get retained(): number {
+    let count = 0;
+    for (const pool of this.pools.values()) count += pool.length;
+    return count;
+  }
+
+  dispose(): void {
+    for (const pool of this.pools.values()) for (const mesh of pool) mesh.dispose();
+    this.pools.clear();
+  }
+}
+
 /** One streamed region: shared terrain, lava, plants, water and glass materials. */
 export class RegionMesh {
   readonly region: DecodedSceneRegion;
@@ -39,9 +78,11 @@ export class RegionMesh {
   private readonly fade = new Vector2(0, 1);
   private readonly layers: Layer[] = [];
   private quadCollider: QuadCollider | undefined;
+  private readonly pool: RegionMeshPool | undefined;
 
-  constructor(region: DecodedSceneRegion, materials: SceneMaterials) {
+  constructor(region: DecodedSceneRegion, materials: SceneMaterials, pool?: RegionMeshPool) {
     this.region = region;
+    this.pool = pool;
     this.byteLength =
       region.opaque.byteLength + region.plants.byteLength + region.translucent.byteLength;
     // Quads count in cells, and cells are cubes, so one scale places every axis.
@@ -92,9 +133,16 @@ export class RegionMesh {
   }
 
   dispose(): void {
-    for (const { mesh } of this.layers) mesh.geometry.dispose();
+    for (const { mesh, materials } of this.layers) {
+      if (this.pool !== undefined) this.pool.release(mesh, materials);
+      else {
+        mesh.geometry.dispose();
+        mesh.dispose();
+      }
+    }
     this.layers.length = 0;
     this.group.clear();
+    this.quadCollider = undefined;
   }
 
   private add(
@@ -113,7 +161,7 @@ export class RegionMesh {
     geometry.boundingBox = bounds;
     geometry.boundingSphere = bounds.getBoundingSphere(new Sphere());
 
-    const mesh = new Mesh(geometry, materials.steady);
+    const mesh = this.pool?.acquire(materials, geometry) ?? new Mesh(geometry, materials.steady);
     mesh.castShadow = options.castShadow;
     mesh.receiveShadow = true;
     mesh.renderOrder = options.renderOrder;

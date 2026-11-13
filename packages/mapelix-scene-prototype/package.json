@@ -16,6 +16,14 @@
       "types": "./dist/dimensions.d.ts",
       "import": "./dist/dimensions.js"
     },
+    "./discoveries": {
+      "types": "./dist/discoveries.d.ts",
+      "import": "./dist/discoveries.js"
+    },
+    "./selection": {
+      "types": "./dist/selection.d.ts",
+      "import": "./dist/selection.js"
+    },
     "./format": {
       "types": "./dist/format.d.ts",
       "import": "./dist/format.js"

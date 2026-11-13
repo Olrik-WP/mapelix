@@ -141,6 +141,12 @@ The 3D engine now supports Overworld, Nether and End profiles, dimension selecti
 Nether roof cut that preserves interior geometry through every LOD. See the
 [native-dimension milestone](docs/native-dimensions.md) for validation and integration details.
 
+The local 3D viewer also offers 16/32-block **Caves** slices, including enclosed
+negative-Y caverns. See [underground rendering](docs/underground-rendering.md) for
+the limits, memory lifecycle and integration contract. The subsequent
+[exploration milestones](docs/underground-exploration.md) add a selectable 3D
+volume and independent discovery markers, including fully buried ores.
+
 ## More information
 
 - [`OPTIMIZATIONS.md`](OPTIMIZATIONS.md) records successful and failed speed, memory, and accuracy

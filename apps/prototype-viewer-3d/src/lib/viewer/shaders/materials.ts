@@ -78,13 +78,13 @@ export interface SceneMaterials {
   readonly glass: MaterialPair;
 }
 
-export function createSceneMaterials(atmosphere: Atmosphere): SceneMaterials {
+export function createSceneMaterials(atmosphere: Atmosphere, clip?: Node<"bool">): SceneMaterials {
   return {
-    terrain: withFading(createTerrainMaterial(atmosphere)),
-    lava: withFading(createLavaMaterial(atmosphere)),
-    plants: withFading(createPlantMaterial(), plantMask()),
-    water: withFading(createWaterMaterial(atmosphere)),
-    glass: withFading(createGlassMaterial(atmosphere)),
+    terrain: withFading(createTerrainMaterial(atmosphere), clip),
+    lava: withFading(createLavaMaterial(atmosphere), clip),
+    plants: withFading(createPlantMaterial(atmosphere), clip ? plantMask().and(clip) : plantMask()),
+    water: withFading(createWaterMaterial(atmosphere), clip),
+    glass: withFading(createGlassMaterial(atmosphere), clip),
   };
 }
 
@@ -170,7 +170,11 @@ function createTerrainMaterial(atmosphere: Atmosphere): MeshStandardNodeMaterial
   material.aoNode = quadOcclusion;
   // Lamps glow harder at night, bright enough for the bloom pass to pick them up.
   const glow = mix(float(4.2), float(1.4), atmosphere.daylight);
-  material.emissiveNode = select(glowing, quadColor.mul(glow), vec3(0));
+  material.emissiveNode = select(
+    glowing,
+    quadColor.mul(glow),
+    material.colorNode.mul(atmosphere.caveLight),
+  );
   return material;
 }
 
@@ -211,7 +215,7 @@ const plantMask = Fn(() => {
   );
 });
 
-function createPlantMaterial(): MeshLambertNodeMaterial {
+function createPlantMaterial(atmosphere: Atmosphere): MeshLambertNodeMaterial {
   const material = new MeshLambertNodeMaterial({ side: DoubleSide });
   // A gentle sway that grows toward the tips, phased per block so fields ripple.
   const sway = sin(time.mul(1.7).add(positionWorld.x.mul(0.37)).add(positionWorld.z.mul(0.23)));
@@ -227,6 +231,9 @@ function createPlantMaterial(): MeshLambertNodeMaterial {
   material.colorNode = base.mul(shade).mul(blockNoise().mul(0.2).add(0.9));
   // A fixed view-space up normal, so the back sides of the planes are lit like the front.
   material.normalNode = transformNormalToView(vec3(0, 1, 0));
+  // Three 0.186 NodeMaterial supports this for Lambert too; its Lambert typings omit it.
+  (material as MeshLambertNodeMaterial & { emissiveNode: Node<"vec3"> }).emissiveNode =
+    quadColor.mul(atmosphere.caveLight);
   return material;
 }
 
@@ -253,6 +260,9 @@ function reflection(atmosphere: Atmosphere, normal: Node<"vec3">, toCamera: Node
  * show the bed and deep water turns to the biome's color.
  */
 function createWaterMaterial(atmosphere: Atmosphere): MeshBasicNodeMaterial {
+  // Keep the depth target across object/shader recompilation and view switches.
+  const retainedViewportDepth = viewportDepthTexture();
+  const retainedViewportColor = viewportSharedTexture();
   const material = new MeshBasicNodeMaterial({ transparent: true, depthWrite: true });
   material.positionNode = quadPosition();
 
@@ -281,11 +291,11 @@ function createWaterMaterial(atmosphere: Atmosphere): MeshBasicNodeMaterial {
     const offset = normal.xz.mul(0.035).div(surfaceDepth.mul(0.02).add(1));
     const bentUV = screenUV.add(offset);
     const depthAt = (uv: Node<"vec2">) =>
-      perspectiveDepthToViewZ(viewportDepthTexture(uv).x, cameraNear, cameraFar).negate();
+      perspectiveDepthToViewZ(retainedViewportDepth.sample(uv).x, cameraNear, cameraFar).negate();
     const bentThickness = depthAt(bentUV).sub(surfaceDepth);
     const sampleUV = select(bentThickness.lessThan(0), screenUV, bentUV);
     const thickness = max(depthAt(sampleUV).sub(surfaceDepth), 0);
-    const behind = viewportSharedTexture(sampleUV).rgb;
+    const behind = retainedViewportColor.sample(sampleUV).rgb;
 
     // Red fades first, then green, like real water.
     const transmitted = exp(vec3(0.42, 0.13, 0.085).mul(thickness).negate());

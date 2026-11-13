@@ -2,12 +2,14 @@
   import type { Attachment } from "svelte/attachments";
   import {
     DIMENSIONS,
+    CAVE_LIMITS,
     contextKey,
     contextSearch,
     parseDimension,
     sceneContext,
     type Dimension,
     type SceneContext,
+    type ViewMode,
   } from "@mapelix/scene-prototype/dimensions";
 
   import CoordinateReadout from "$lib/components/CoordinateReadout.svelte";
@@ -16,6 +18,16 @@
   import StatusCard from "$lib/components/StatusCard.svelte";
   import TimeOfDay from "$lib/components/TimeOfDay.svelte";
   import ViewControls from "$lib/components/ViewControls.svelte";
+  import SelectionControls from "$lib/components/SelectionControls.svelte";
+  import DiscoveryControls from "$lib/components/DiscoveryControls.svelte";
+  import {
+    DEFAULT_DISCOVERY_FILTERS,
+    discoveryFilters,
+    type DiscoveryFilters,
+    type DiscoveryGroup,
+  } from "@mapelix/scene-prototype/discoveries";
+  import { selectionAround, type HorizontalSelection } from "@mapelix/scene-prototype/selection";
+  import type { SelectionTool } from "$lib/viewer/selection-box";
   import { readViewFromUrl, writeViewToUrl } from "$lib/view-url";
   import type { Pointed, ViewerSnapshot, WorldInfo, WorldViewer } from "$lib/viewer/world-viewer";
 
@@ -35,6 +47,13 @@
   let hintVisible = $state(true);
   let dimension = $state<Dimension>("overworld");
   let ceilingY = $state(96);
+  let mode = $state<ViewMode>("surface");
+  let sliceMinY = $state(-64);
+  let sliceThickness = $state(32);
+  let selectedArea = $state.raw<HorizontalSelection>();
+  let selectionTool = $state<SelectionTool>("off");
+  let discoveryPrefs = $state.raw<DiscoveryFilters>(DEFAULT_DISCOVERY_FILTERS);
+  const surfaceCeilings = new Map<Dimension, number>();
   let switching = $state(false);
   let loadContext: ((context: SceneContext) => Promise<void>) | undefined;
 
@@ -53,6 +72,18 @@
   $effect(() => {
     viewer?.setZoomUnlocked(zoomUnlocked);
   });
+  $effect(() => {
+    viewer?.setSelectionTool(selectionTool);
+  });
+  $effect(() => {
+    if (!viewer) return;
+    viewer.setDiscoveryFilters(discoveryPrefs);
+    try {
+      localStorage.setItem("mapelix-discoveries-v1", JSON.stringify(discoveryPrefs));
+    } catch {
+      /* Preferences are optional when browser storage is unavailable. */
+    }
+  });
 
   const attachViewer: Attachment<HTMLDivElement> = (element) => {
     let disposed = false;
@@ -68,7 +99,22 @@
     }
     dimension = start.context.dimension;
     ceilingY = start.context.ceilingY;
+    mode = start.context.mode;
+    sliceMinY = start.context.minY;
+    if (start.context.mode === "caves") sliceThickness = start.context.maxY - start.context.minY;
     hour = start.hour ?? DEFAULT_HOUR;
+    selectedArea = start.selection;
+    let initialDiscoveries = start.discoveries;
+    if (!initialDiscoveries) {
+      try {
+        const stored = localStorage.getItem("mapelix-discoveries-v1");
+        if (stored) initialDiscoveries = discoveryFilters(JSON.parse(stored));
+      } catch {
+        /* Ignore invalid saved preferences. */
+      }
+    }
+    initialDiscoveries ??= DEFAULT_DISCOVERY_FILTERS;
+    discoveryPrefs = initialDiscoveries;
     let metadataRequest = new AbortController();
     let generation = 0;
 
@@ -86,17 +132,16 @@
         const info: WorldInfo = await response.json();
         if (disposed || current !== generation) return;
         created?.setWorld(info, world?.dimension === info.dimension);
+        selectedArea = created?.snapshot().selection;
         world = info;
-        dimension = info.dimension;
-        ceilingY = info.ceilingY;
+        updateContext(info);
         pointed = undefined;
         snapshot = created?.snapshot();
       } catch (cause) {
         if (disposed || current !== generation) return;
         failure = cause instanceof Error ? cause.message : String(cause);
         if (world) {
-          dimension = world.dimension;
-          ceilingY = world.ceilingY;
+          updateContext(world);
         }
       } finally {
         if (current === generation) switching = false;
@@ -112,7 +157,21 @@
       const info: WorldInfo = await response.json();
       if (disposed) return;
       world = info;
-      created = await WorldViewer.create(element, info, start.view);
+      updateContext(info);
+      created = await WorldViewer.create(element, info, start.view, {
+        ...(start.selection ? { selection: start.selection } : {}),
+        discoveryFilters: initialDiscoveries,
+        onDiscoverySelect: (group) => {
+          void exploreDiscovery(group);
+        },
+        onSelectionChange: (change) => {
+          selectedArea = change.selection;
+          if (change.minY !== sliceMinY) {
+            sliceMinY = change.minY;
+            changeSlice();
+          }
+        },
+      });
       if (disposed) {
         created.dispose();
         return;
@@ -121,8 +180,15 @@
       polling = setInterval(() => {
         snapshot = created?.snapshot();
         if (snapshot === undefined) return;
-        const key = JSON.stringify([snapshot.view, hour, world && contextKey(world)]);
-        if (key !== lastUrl && world) writeViewToUrl(snapshot.view, hour, world);
+        const key = JSON.stringify([
+          snapshot.view,
+          hour,
+          world && contextKey(world),
+          snapshot.selection,
+          discoveryPrefs,
+        ]);
+        if (key !== lastUrl && world)
+          writeViewToUrl(snapshot.view, hour, world, snapshot.selection, discoveryPrefs);
         lastUrl = key;
       }, 250);
     })().catch((cause: unknown) => {
@@ -176,6 +242,53 @@
   function returnToSpawn(): void {
     if (world !== undefined) viewer?.flyTo(world.spawn.x, world.spawn.z);
   }
+
+  function updateContext(info: WorldInfo): void {
+    const context = sceneContext(info.dimension, info);
+    dimension = context.dimension;
+    mode = context.mode;
+    ceilingY = context.maxY;
+    if (mode === "caves") {
+      sliceMinY = context.minY;
+      sliceThickness = context.maxY - context.minY;
+    } else surfaceCeilings.set(dimension, context.maxY);
+  }
+
+  function changeMode(value: string): void {
+    if (value === "surface") {
+      void loadContext?.(sceneContext(dimension, surfaceCeilings.get(dimension)));
+    } else changeSlice();
+  }
+
+  function changeSlice(): void {
+    const config = DIMENSIONS[dimension];
+    sliceMinY = Math.max(config.minY, Math.min(sliceMinY, config.maxY - sliceThickness));
+    void loadContext?.(
+      sceneContext(dimension, { mode: "caves", minY: sliceMinY, maxY: sliceMinY + sliceThickness }),
+    );
+  }
+
+  function applyArea(area: HorizontalSelection | undefined): void {
+    selectedArea = area;
+    viewer?.setSelection(area);
+  }
+
+  async function exploreDiscovery(group: DiscoveryGroup): Promise<void> {
+    if (!viewer || group.dimension !== dimension) return;
+    const current = viewer.snapshot().context;
+    if (current.mode !== "caves" || group.y < current.minY || group.y >= current.maxY) {
+      const config = DIMENSIONS[dimension];
+      const thickness = current.mode === "caves" ? current.maxY - current.minY : sliceThickness;
+      const minY = Math.max(
+        config.minY,
+        Math.min(config.maxY - thickness, Math.floor(group.y / 16) * 16),
+      );
+      await loadContext?.(sceneContext(dimension, { mode: "caves", minY, maxY: minY + thickness }));
+    }
+    const context = viewer?.snapshot().context;
+    if (context?.mode === "caves" && group.y >= context.minY && group.y < context.maxY)
+      viewer?.focusOn(group);
+  }
 </script>
 
 <svelte:head>
@@ -196,6 +309,9 @@
   <div class="overlay">
     <div class="top-left">
       <StatusCard name={world?.name} loading={snapshot?.streaming.remaining ?? 0} {failure} />
+      {#if mode === "caves" && snapshot && snapshot.streaming.cached > 0 && snapshot.streaming.remaining === 0 && snapshot.streaming.quads === 0}
+        <p class="glass cave-hint">No cave surfaces here. Change depth or move to another area.</p>
+      {/if}
       {#if debugVisible && snapshot !== undefined}
         <DebugPanel
           {snapshot}
@@ -221,7 +337,40 @@
             <option value={config.dimension}>{config.label}</option>
           {/each}
         </select>
-        {#if dimension === "nether"}
+        <label for="view-mode">View</label>
+        <select
+          id="view-mode"
+          value={mode}
+          disabled={!viewer || switching}
+          onchange={(event) => changeMode(event.currentTarget.value)}
+        >
+          <option value="surface">Surface</option>
+          <option value="caves">Caves</option>
+        </select>
+        {#if mode === "caves"}
+          <label for="cave-thickness">Slice thickness</label>
+          <select
+            id="cave-thickness"
+            bind:value={sliceThickness}
+            disabled={switching}
+            onchange={changeSlice}
+          >
+            {#each CAVE_LIMITS.thicknesses as thickness}
+              <option value={thickness}>{thickness} blocks</option>
+            {/each}
+          </select>
+          <label for="cave-min-y">Slice: Y {sliceMinY} to {sliceMinY + sliceThickness - 1}</label>
+          <input
+            id="cave-min-y"
+            type="range"
+            min={DIMENSIONS[dimension].minY}
+            max={DIMENSIONS[dimension].maxY - sliceThickness}
+            step="16"
+            bind:value={sliceMinY}
+            disabled={switching}
+            onchange={changeSlice}
+          />
+        {:else if dimension === "nether"}
           <label for="ceiling">Hide terrain from Y {ceilingY}</label>
           <input
             id="ceiling"
@@ -235,6 +384,32 @@
           />
         {/if}
       </div>
+      {#if mode === "caves" && viewer}
+        <SelectionControls
+          selection={selectedArea}
+          tool={selectionTool}
+          onselect={() => {
+            const v = viewer?.snapshot().view;
+            if (v) applyArea(selectionAround(v.x, v.z));
+          }}
+          onchange={applyArea}
+          ontool={(tool) => {
+            selectionTool = tool;
+          }}
+        />
+      {/if}
+      {#if viewer && snapshot}
+        <DiscoveryControls
+          filters={discoveryPrefs}
+          stats={snapshot.discoveries}
+          onchange={(prefs) => {
+            discoveryPrefs = prefs;
+          }}
+          onfocus={(group) => {
+            void exploreDiscovery(group);
+          }}
+        />
+      {/if}
       <JumpForm onjump={(x, z) => viewer?.flyTo(x, z)} onhome={returnToSpawn} />
     </div>
 
@@ -248,7 +423,7 @@
           Drag to move, right-drag to turn, scroll to zoom. WASD, Q and E work too.
         </p>
       {/if}
-      {#if dimension === "overworld"}<TimeOfDay bind:hour />{/if}
+      {#if dimension === "overworld" && mode === "surface"}<TimeOfDay bind:hour />{/if}
     </div>
 
     <div class="bottom-right">
@@ -325,6 +500,8 @@
   .top-right {
     grid-area: 1 / 3;
     align-items: flex-end;
+    max-height: calc(100vh - 130px);
+    overflow-y: auto;
   }
 
   .bottom-left {
@@ -352,6 +529,14 @@
     font-size: 12px;
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  .cave-hint {
+    max-width: 280px;
+    padding: 10px 12px;
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
   }
 
   @media (max-width: 760px) {

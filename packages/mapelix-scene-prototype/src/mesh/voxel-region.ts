@@ -3,6 +3,7 @@ import { regionCellSize, regionGridSize, regionSpan } from "../format.js";
 import { VoxelKind } from "./block-palette.js";
 import type { ChunkVoxelReader } from "./chunk-voxels.js";
 import { VoxelBox, isOpaqueKind } from "./voxel-box.js";
+import type { VerticalBounds } from "../dimensions.js";
 
 /** Rock under the part of a chunk that was read, where a cliff or the world edge shows it. */
 const DEEP_ROCK = rgb(118, 116, 112);
@@ -12,6 +13,7 @@ const DEEP_ROCK = rgb(118, 116, 112);
  * `voxelSize` blocks wide, and the region itself is `span` voxels across.
  */
 export interface VoxelRegion {
+  readonly window?: VerticalBounds;
   readonly level: number;
   readonly x: number;
   readonly z: number;
@@ -41,6 +43,7 @@ export function buildVoxelRegion(
   regionX: number,
   regionZ: number,
   ceilingY?: number,
+  window?: VerticalBounds,
 ): VoxelRegion | undefined {
   const voxelSize = regionCellSize(level);
   const span = regionGridSize(level);
@@ -57,7 +60,13 @@ export function buildVoxelRegion(
   let regionHasChunks = false;
   for (let row = 0; row < chunksPerSide; row += 1) {
     for (let column = 0; column < chunksPerSide; column += 1) {
-      const chunk = reader.read(firstChunkX + column, firstChunkZ + row, voxelSize, ceilingY);
+      const chunk = reader.read(
+        firstChunkX + column,
+        firstChunkZ + row,
+        voxelSize,
+        ceilingY,
+        window,
+      );
       if (chunk === undefined) continue;
       regionHasChunks ||=
         row >= marginChunks &&
@@ -74,7 +83,12 @@ export function buildVoxelRegion(
   const box = new VoxelBox(span + margin * 2, (high - low) / voxelSize);
   const explored = new Uint8Array(box.width * box.width);
   for (const chunk of placed) {
-    placeChunk(box, chunk, (chunk.low - low) / voxelSize, reader.geometry === "surface");
+    placeChunk(
+      box,
+      chunk,
+      (chunk.low - low) / voxelSize,
+      window === undefined && reader.geometry === "surface",
+    );
     for (let z = 0; z < chunkVoxels; z += 1) {
       explored.fill(
         1,
@@ -83,7 +97,18 @@ export function buildVoxelRegion(
       );
     }
   }
-  return { level, x: regionX, z: regionZ, voxelSize, span, margin, low, box, explored };
+  return {
+    level,
+    x: regionX,
+    z: regionZ,
+    voxelSize,
+    span,
+    margin,
+    low,
+    box,
+    explored,
+    ...(window === undefined ? {} : { window }),
+  };
 }
 
 /** Copies a chunk into the region box, and fills the layers below it with its deepest voxels. */

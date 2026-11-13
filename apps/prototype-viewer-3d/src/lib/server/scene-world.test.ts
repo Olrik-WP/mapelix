@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sceneContext } from "@mapelix/scene-prototype/dimensions";
 
 const mocks = vi.hoisted(() => ({
@@ -41,8 +41,37 @@ beforeEach(() => {
     close: async () => {},
   }));
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe("dimension server caches", () => {
+  it("bounds cave bytes independently of Surface and does not accumulate cave disk variants", async () => {
+    vi.stubEnv("MAPELIX_CAVE_MEMORY_MIB", "1");
+    mocks.opened.mockImplementation(async () => ({
+      info: { name: "Caves", spawn: { x: 0, y: 80, z: 0 } },
+      buildRegion: async (request: { mode?: string; minY?: number }) => {
+        mocks.built(request);
+        return {
+          bytes: new Uint8Array(request.mode === "caves" ? 600 * 1024 : 12),
+          milliseconds: 1,
+        };
+      },
+      close: async () => {},
+    }));
+    const server = await import("./scene-world");
+    const request = { level: 0, x: 0, z: 0 },
+      signal = new AbortController().signal;
+    await server.loadRegion(request, signal);
+    const a = sceneContext("overworld", { mode: "caves", minY: -64, maxY: -32 });
+    const b = sceneContext("overworld", { mode: "caves", minY: -48, maxY: -16 });
+    await server.loadRegion(request, signal, a);
+    expect((await server.loadRegion(request, signal, a)).cacheStatus).toBe("memory");
+    await server.loadRegion(request, signal, b);
+    expect((await server.loadRegion(request, signal, a)).cacheStatus).toBe("build");
+    expect((await server.loadRegion(request, signal)).cacheStatus).toBe("memory");
+    expect(mocks.disk.size).toBe(1);
+    expect(mocks.opened).toHaveBeenCalledTimes(1);
+    expect(() => server.loadRegion({ ...request, level: 2 }, signal, a)).toThrow("LOD");
+  });
   it("isolates memory, workers and persisted regions, including after a server restart", async () => {
     const server = await import("./scene-world");
     const request = { level: 0, x: -1, z: 0 };
