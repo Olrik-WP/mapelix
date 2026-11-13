@@ -16,12 +16,14 @@ import {
 } from "@mapelix/scene-prototype/discoveries";
 import type { WorldInfo } from "./world-viewer";
 import { ExplorationRequests, ExplorationRequestError } from "./exploration-requests";
+import { nearSurface, surfaceDiscoveryTiles } from "./discovery-focus";
 
 export interface DiscoveryOptions {
   readonly base?: string;
   readonly suffix?: string;
   readonly memoryBudget?: number;
   readonly explorationRequests?: ExplorationRequests;
+  readonly surfaceHeightAt?: (x: number, z: number) => number | undefined;
   readonly onselect: (group: DiscoveryGroup) => void;
 }
 export interface DiscoveryStats extends DiscoveryQuery {
@@ -123,9 +125,11 @@ export class DiscoveryStreamer {
     if (!this.available) this.cancel();
   }
 
-  setFilters(input: DiscoveryFilters): void {
+  setFilters(input: DiscoveryFilters): boolean {
+    const next = discoveryFilters(input);
+    if (JSON.stringify(next) === JSON.stringify(this.filters)) return false;
     this.cancelQuery();
-    this.filters = discoveryFilters(input);
+    this.filters = next;
     this.dirty = true;
     this.wantedKey = "";
     this.failed.clear();
@@ -135,6 +139,7 @@ export class DiscoveryStreamer {
       this.cancel();
       this.clearMarkers();
     }
+    return true;
   }
 
   setSelection(selection: HorizontalSelection | undefined): void {
@@ -215,7 +220,11 @@ export class DiscoveryStreamer {
       );
       if (tile) this.request(tile);
     }
-    if (this.dirty && !this.grouping) {
+    if (
+      this.dirty &&
+      !this.grouping &&
+      (terrainReady || this.context.mode !== "surface" || this.filters.allHeights)
+    ) {
       const tiles: DiscoveryTile[] = [];
       for (const wanted of this.wanted) {
         const cached = this.cache.get(wanted.key);
@@ -225,13 +234,7 @@ export class DiscoveryStreamer {
           tiles.push(cached.tile);
         }
       }
-      this.grouping = queryDiscoverySteps(
-        tiles,
-        this.filters,
-        this.context,
-        { x: focus.x, y: focus.y, z: focus.z },
-        this.selection,
-      );
+      this.grouping = this.queryTiles(tiles, { x: focus.x, y: focus.y, z: focus.z });
       this.dirty = false;
     }
     // A large all-height ore search must not block the render loop in a single long task.
@@ -256,7 +259,15 @@ export class DiscoveryStreamer {
     });
     for (const marker of this.markers.values()) {
       const g = marker.group;
-      this.point.set(g.x + 0.5, g.y + 0.5, g.z + 0.5).project(camera);
+      const surface =
+        this.context.mode === "surface" ? this.options.surfaceHeightAt?.(g.x, g.z) : undefined;
+      // Keep buried discoveries readable on Surface without changing indexed coordinates.
+      const y = surface === undefined ? g.y + 0.5 : Math.max(g.y + 0.5, surface + 0.6);
+      marker.button.setAttribute(
+        "data-location",
+        surface !== undefined && !nearSurface(g.y, surface) ? "underground" : "surface",
+      );
+      this.point.set(g.x + 0.5, y, g.z + 0.5).project(camera);
       const visible =
         this.point.z >= -1 &&
         this.point.z <= 1 &&
@@ -266,6 +277,15 @@ export class DiscoveryStreamer {
       if (visible)
         marker.button.style.transform = `translate(${((this.point.x + 1) * rect.width) / 2}px, ${((1 - this.point.y) * rect.height) / 2}px) translate(-50%, -50%)`;
     }
+  }
+
+  private *queryTiles(
+    tiles: readonly DiscoveryTile[],
+    focus: { x: number; y: number; z: number },
+  ): Generator<void, DiscoveryQuery> {
+    if (this.context.mode === "surface" && !this.filters.allHeights && this.options.surfaceHeightAt)
+      tiles = yield* surfaceDiscoveryTiles(tiles, this.options.surfaceHeightAt);
+    return yield* queryDiscoverySteps(tiles, this.filters, this.context, focus, this.selection);
   }
 
   private request(tile: { key: string; x: number; z: number }): void {

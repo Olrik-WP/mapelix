@@ -30,6 +30,8 @@ import {
 } from "./camera-rig";
 import { DepthFollow, type DepthNavigation } from "./depth-follow";
 import { ExplorationRequests } from "./exploration-requests";
+import { DiscoveryDetails } from "./discovery-details";
+import { discoveryContext, discoveryDistance, type DiscoveryDetailText } from "./discovery-focus";
 import { RegionStreamer, type StreamingStats } from "./region-streamer";
 import { RegionMeshPool } from "./region-mesh";
 import { createSceneMaterials, type SceneMaterials } from "./shaders/materials";
@@ -37,6 +39,7 @@ import {
   CAVE_LIMITS,
   DIMENSIONS,
   sceneContext,
+  contextKey,
   type SceneContext,
   type SceneContextInput,
 } from "@mapelix/scene-prototype/dimensions";
@@ -50,12 +53,13 @@ export interface WorldInfo extends SceneContextInput {
 }
 
 export type { CameraView, VerticalMovement } from "./camera-rig";
+export type { DiscoveryDetailText } from "./discovery-focus";
 
 /** Kept across view switches so embedding does not fall back to a different server. */
 export interface WorldViewerOptions {
-  /** Host metadata loader for automatic depth; retains host authentication/base paths. */
+  /** Host metadata loader for depth/discovery transitions; retains host URL/authentication. */
   readonly loadDepth?: (context: SceneContext, signal: AbortSignal) => Promise<WorldInfo>;
-  /** Emitted only after an automatic transition has applied, including minY/maxY. */
+  /** Emitted after automatic depth or discovery navigation changes context. */
   readonly onDepthChange?: (context: SceneContext) => void;
   readonly autoDepth?: boolean;
   /** Minimum time between automatic slice requests, at least 1000 ms (default 2000). */
@@ -71,6 +75,9 @@ export interface WorldViewerOptions {
   readonly discoveryMemoryBudget?: number;
   readonly discoveryFilters?: DiscoveryFilters;
   readonly onDiscoverySelect?: (discovery: DiscoveryGroup) => void;
+  readonly discoveryDetails?: boolean;
+  readonly formatDiscoveryDetails?: (discovery: DiscoveryGroup) => DiscoveryDetailText;
+  readonly onDiscoveryFocusChange?: (discovery: DiscoveryGroup | undefined) => void;
 }
 
 export interface ViewerSnapshot {
@@ -82,6 +89,7 @@ export interface ViewerSnapshot {
   readonly selection: HorizontalSelection | undefined;
   readonly discoveries: DiscoveryStats;
   readonly navigation: DepthNavigation;
+  readonly selectedDiscovery: DiscoveryGroup | undefined;
 }
 
 export interface Pointed {
@@ -120,9 +128,14 @@ export class WorldViewer {
   private readonly selections = new Map<string, HorizontalSelection>();
   private readonly discoveries: DiscoveryStreamer;
   private context: SceneContext;
+  private caveThickness: number = CAVE_LIMITS.defaultThickness;
   private world: WorldInfo;
   private readonly depthFollow: DepthFollow<WorldInfo>;
   private readonly explorationRequests = new ExplorationRequests(2);
+  private readonly discoveryDetails: DiscoveryDetails;
+  private selectedDiscovery: DiscoveryGroup | undefined;
+  private discoveryRequest: AbortController | undefined;
+  private refineDiscovery = false;
   private hour = 15.5;
   private readonly rig: CameraRig;
   private readonly timer = new Timer();
@@ -146,6 +159,7 @@ export class WorldViewer {
     this.container = container;
     this.world = world;
     this.context = sceneContext(world.dimension, world);
+    if (this.context.mode === "caves") this.caveThickness = this.context.maxY - this.context.minY;
     this.options = options;
     this.depthFollow = new DepthFollow(
       options.loadDepth,
@@ -165,6 +179,8 @@ export class WorldViewer {
     this.atmosphere.setCaves(this.context.mode === "caves");
     this.renderer = renderer;
     container.append(renderer.domElement);
+    renderer.domElement.tabIndex = 0;
+    renderer.domElement.setAttribute("aria-label", "3D world view");
 
     retainScreenUniforms();
     this.selectionBox = new SelectionBox(
@@ -175,7 +191,10 @@ export class WorldViewer {
         this.setSelection(change.selection);
         this.options.onSelectionChange?.(change);
       },
-      (dragging) => this.rig?.setEnabled(!dragging),
+      (dragging) => {
+        if (dragging) this.clearDiscoveryFocus();
+        this.rig?.setEnabled(!dragging);
+      },
     );
     this.materials = createSceneMaterials(this.atmosphere, this.selectionBox.mask);
     this.streamer = this.createStreamer(world);
@@ -189,22 +208,39 @@ export class WorldViewer {
     // Public WebGPU LightShadow hook omitted by Three's shared shadow typings.
     Object.assign(this.sun.shadow, { filterNode: createStablePCFFilter(this.sun.shadow) });
 
-    this.rig = new CameraRig(this.camera, renderer.domElement, {
-      heightAt: (x, z) =>
-        this.context.mode === "caves" ? undefined : this.streamer.heightAt(x, z),
-      raycast: (origin, direction, far, radius) =>
-        this.streamer.raycast(origin, direction, far, radius),
-    });
+    this.rig = new CameraRig(
+      this.camera,
+      renderer.domElement,
+      {
+        heightAt: (x, z) =>
+          this.context.mode === "caves" ? undefined : this.streamer.heightAt(x, z),
+        raycast: (origin, direction, far, radius) =>
+          this.streamer.raycast(origin, direction, far, radius),
+      },
+      (action) => {
+        if (action !== "rotate") this.clearDiscoveryFocus();
+      },
+    );
+    this.discoveryDetails = new DiscoveryDetails(
+      container,
+      () => this.clearDiscoveryFocus(),
+      options.formatDiscoveryDetails,
+      options.discoveryDetails,
+    );
     this.rig.setVerticalWindow(this.context.mode === "caves" ? this.context : undefined);
     this.discoveries = new DiscoveryStreamer(container, {
       explorationRequests: this.explorationRequests,
+      surfaceHeightAt: (x, z) =>
+        this.context.mode === "surface" ? this.streamer.heightAt(x, z) : undefined,
       ...(options.discoveryBase === undefined ? {} : { base: options.discoveryBase }),
       ...(options.discoverySuffix === undefined ? {} : { suffix: options.discoverySuffix }),
       ...(options.discoveryMemoryBudget === undefined
         ? {}
         : { memoryBudget: options.discoveryMemoryBudget }),
       onselect: (group) =>
-        options.onDiscoverySelect ? options.onDiscoverySelect(group) : this.focusOn(group),
+        options.onDiscoverySelect
+          ? options.onDiscoverySelect(group)
+          : void this.focusDiscovery(group),
     });
     this.discoveries.setWorld(world);
     if (options.discoveryFilters) this.discoveries.setFilters(options.discoveryFilters);
@@ -295,6 +331,7 @@ export class WorldViewer {
       selection: this.selections.get(this.context.dimension),
       discoveries: this.discoveries.stats,
       navigation: this.depthFollow.state,
+      selectedDiscovery: this.selectedDiscovery,
     };
   }
 
@@ -314,6 +351,7 @@ export class WorldViewer {
 
   /** Replaces all terrain together while retaining the renderer, materials and controls. */
   setWorld(world: WorldInfo, keepView = false): void {
+    this.clearDiscoveryFocus();
     this.depthFollow.cancel();
     this.applyWorld(world, keepView);
   }
@@ -326,6 +364,7 @@ export class WorldViewer {
     this.streamer.dispose();
     this.world = world;
     this.context = context;
+    if (context.mode === "caves") this.caveThickness = context.maxY - context.minY;
     this.discoveries.setWorld(world);
     this.streamer = this.createStreamer(world);
     this.scene.add(this.streamer.root);
@@ -413,6 +452,7 @@ export class WorldViewer {
   /** Return above the current cut, retaining X/Z, discoveries and selection. */
   recoverCamera(): void {
     if (this.context.mode !== "caves") return;
+    this.clearDiscoveryFocus();
     this.depthFollow.cancel();
     this.rig.stopMovement();
     this.setSelectionTool("off");
@@ -431,6 +471,7 @@ export class WorldViewer {
   }
 
   flyTo(x: number, z: number): void {
+    this.clearDiscoveryFocus();
     this.rig.flyTo(x, z);
   }
 
@@ -450,14 +491,100 @@ export class WorldViewer {
   }
 
   setDiscoveryFilters(filters: DiscoveryFilters): void {
-    this.discoveries.setFilters(filters);
+    if (this.discoveries.setFilters(filters)) this.clearDiscoveryFocus();
   }
 
-  /** Focus a known block without settling onto the surface above it. */
+  /** Focus a known block, preserving orientation with a moderate approach. */
   focusOn(point: Pointed): void {
-    this.rig.setView({ ...this.snapshot().view, ...point }, { settle: false });
+    this.clearDiscoveryFocus();
+    this.rig.setFocusPinned(true);
+    const previous = this.snapshot().view;
+    this.rig.setView(
+      { ...previous, ...point, distance: Math.min(previous.distance, 24) },
+      { settle: false },
+    );
+    this.refineDiscovery = true;
     this.fitViewDistance();
     this.regionsChanged = true;
+  }
+
+  /** Host-owned marker callbacks call this instead of setWorld followed by focusOn. */
+  async focusDiscovery(group: DiscoveryGroup): Promise<boolean> {
+    if (group.dimension !== this.context.dimension) return false;
+    this.clearDiscoveryFocus();
+    this.depthFollow.cancel();
+    const controller = new AbortController();
+    this.discoveryRequest = controller;
+    const target = discoveryContext(
+      group,
+      this.context,
+      this.streamer.heightAt(group.x, group.z),
+      this.caveThickness,
+    );
+    let contextChanged = false;
+    try {
+      if (contextKey(target) !== contextKey(this.context)) {
+        if (!this.options.loadDepth) return false;
+        const next = await this.options.loadDepth(target, controller.signal);
+        if (controller.signal.aborted || this.discoveryRequest !== controller) return false;
+        if (
+          contextKey(next) !== contextKey(target) ||
+          (next.snapshotRevision ?? next.revision) !==
+            (this.world.snapshotRevision ?? this.world.revision)
+        )
+          throw new Error("Discovery metadata does not match the requested snapshot/context");
+        this.applyWorld(next, true, true);
+        contextChanged = true;
+      }
+      const previous = this.snapshot().view;
+      const selection = this.selections.get(this.context.dimension);
+      if (
+        selection &&
+        this.context.mode === "caves" &&
+        (group.x < selection.minX ||
+          group.x >= selection.maxX ||
+          group.z < selection.minZ ||
+          group.z >= selection.maxZ)
+      )
+        this.setSelection(undefined);
+      this.rig.stopMovement();
+      this.rig.setFocusPinned(true);
+      this.rig.setView(
+        {
+          ...previous,
+          x: group.x,
+          y: group.y,
+          z: group.z,
+          distance: discoveryDistance(group, previous.distance),
+        },
+        { settle: false },
+      );
+      this.selectedDiscovery = group;
+      this.refineDiscovery = true;
+      this.discoveryDetails.show(group);
+      this.fitViewDistance();
+      this.regionsChanged = true;
+      if (contextChanged) this.options.onDepthChange?.(this.context);
+      if (controller.signal.aborted || this.discoveryRequest !== controller) return false;
+      this.options.onDiscoveryFocusChange?.(group);
+      return true;
+    } catch (cause) {
+      if (!controller.signal.aborted) console.warn(cause);
+      return false;
+    } finally {
+      if (this.discoveryRequest === controller) this.discoveryRequest = undefined;
+    }
+  }
+
+  clearDiscoveryFocus(): void {
+    this.discoveryRequest?.abort();
+    this.discoveryRequest = undefined;
+    this.refineDiscovery = false;
+    this.rig?.setFocusPinned(false);
+    if (!this.selectedDiscovery) return;
+    this.selectedDiscovery = undefined;
+    this.discoveryDetails.show(undefined);
+    this.options.onDiscoveryFocusChange?.(undefined);
   }
 
   zoom(factor: number): void {
@@ -480,12 +607,14 @@ export class WorldViewer {
   }
 
   dispose(): void {
+    this.clearDiscoveryFocus();
     this.depthFollow.cancel();
     this.renderer.setAnimationLoop(null);
     this.resizeObserver.disconnect();
     this.rig.dispose();
     this.selectionBox.dispose();
     this.discoveries.dispose();
+    this.discoveryDetails.dispose();
     this.streamer.dispose();
     this.explorationRequests.dispose();
     this.meshPool.dispose();
@@ -510,6 +639,20 @@ export class WorldViewer {
     }
     if (this.streamer.animate(performance.now())) this.regionsChanged = true;
     const terrain = this.streamer.stats;
+    if (this.refineDiscovery && terrain.loading === 0 && terrain.remaining === 0) {
+      this.refineDiscovery = false;
+      const view = this.snapshot().view;
+      const direction = this.camera.position.clone().sub(this.rig.focus).normalize();
+      const hit = this.streamer.raycast(this.rig.focus, direction, view.distance);
+      if (hit && hit.distance > 2 && hit.distance < view.distance) {
+        this.rig.setView(
+          { ...view, distance: Math.max(1.5, hit.distance - 0.5) },
+          { settle: false },
+        );
+        this.fitViewDistance();
+      }
+    }
+    this.discoveryDetails.update(this.renderer.domElement);
     this.depthFollow.update(
       this.context,
       this.rig.focus.y,
@@ -552,7 +695,7 @@ export class WorldViewer {
         ? distance
         : DIMENSIONS[this.context.dimension].atmosphere.hazeDistance;
     // Far from the world, a farther near plane keeps the depth buffer precise.
-    this.camera.near = MathUtils.clamp(zoom / 400, 1, 50);
+    this.camera.near = MathUtils.clamp(zoom / 400, zoom < 6 ? 0.1 : 1, 50);
     // Regions start within reach, and their far corners can lie a few thousand blocks beyond.
     this.camera.far = reach * 1.2 + (caves ? 256 : 4000);
     this.camera.updateProjectionMatrix();

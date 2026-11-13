@@ -99,8 +99,16 @@ test("dragging a 3D selection handle commits bounds only on release and suspends
   const resize = await handle("X");
   await page.mouse.move(resize.x, resize.y);
   await page.mouse.down();
+  const beforeShift = await page.evaluate(() => window.__selectionViewer!.snapshot().view.y);
+  await page.keyboard.down("Shift");
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.__selectionViewer!.snapshot().view.y)).toBeCloseTo(
+    beforeShift,
+    3,
+  );
   await page.mouse.move(resize.x + 45, resize.y, { steps: 12 });
   await page.mouse.up();
+  await page.keyboard.up("Shift");
   await expect.poll(() => page.evaluate(() => window.__selectionChanges.length)).toBe(3);
   const sized = await page.evaluate(() => window.__selectionChanges[2]!);
   expect(sized.selection.maxX - sized.selection.minX).not.toBe(32);
