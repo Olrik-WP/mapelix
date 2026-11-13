@@ -117,5 +117,27 @@ export function modelFixtureRecords(): FixtureRecord[] {
         );
         if (dimension === 1) records.push(sectionRecord(dimension, cx, cz, 7, "minecraft:bedrock"));
       }
+  // Match the positive-coordinate pool with negative-X/Z pools for shader regression tests.
+  for (const dimension of [0, 1, 2])
+    for (const [centerX, centerZ] of [
+      [-48, 16],
+      [48, -48],
+      [-48, -48],
+    ] as const)
+      for (let cz = Math.floor((centerZ - 12) / 16); cz <= Math.floor((centerZ + 11) / 16); cz++)
+        for (
+          let cx = Math.floor((centerX - 12) / 16);
+          cx <= Math.floor((centerX + 11) / 16);
+          cx++
+        ) {
+          records.push(
+            sectionRecord(dimension, cx, cz, 4, (x, y, z) => {
+              if (y < 79) return "minecraft:stone";
+              return Math.abs(x - centerX) < 12 && Math.abs(z - centerZ) < 12
+                ? "minecraft:lava"
+                : "minecraft:stone";
+            }),
+          );
+        }
   return records;
 }

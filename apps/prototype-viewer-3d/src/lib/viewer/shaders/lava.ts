@@ -16,6 +16,7 @@ import {
   sin,
   smoothstep,
   time,
+  uint,
   vec2,
   vec4,
 } from "three/tsl";
@@ -23,15 +24,21 @@ import {
 import type { Atmosphere } from "../atmosphere";
 import { quadLavaFlow, quadPosition } from "./quad";
 
+/** Keep negative lattice coordinates through signed conversion, then mix their integer bits. */
+function latticeHash(cell: Node<"vec2">): Node<"float"> {
+  const x = cell.x.toInt().toUint().mul(uint(1597334677));
+  const y = cell.y.toInt().toUint().mul(uint(3812015801));
+  return hash(x.bitXor(y));
+}
+
 /** Smooth value noise with four samples; evaluated only on lava, never on ordinary terrain. */
 function noise(p: Node<"vec2">): Node<"float"> {
   const cell = p.floor();
   const f = fract(p);
   const weight = f.mul(f).mul(float(3).sub(f.mul(2)));
-  const seed = cell.x.mul(127.1).add(cell.y.mul(311.7));
   return mix(
-    mix(hash(seed), hash(seed.add(127.1)), weight.x),
-    mix(hash(seed.add(311.7)), hash(seed.add(438.8)), weight.x),
+    mix(latticeHash(cell), latticeHash(cell.add(vec2(1, 0))), weight.x),
+    mix(latticeHash(cell.add(vec2(0, 1))), latticeHash(cell.add(vec2(1, 1))), weight.x),
     weight.y,
   );
 }
