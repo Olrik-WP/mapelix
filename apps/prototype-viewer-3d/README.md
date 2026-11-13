@@ -68,6 +68,11 @@ An unvisited dimension displays empty space until the copied world contains chun
 - Enter X and Z coordinates to fly there. The house button returns to spawn.
 - The compass turns the view to face north.
 - The Overworld slider sets the time of day. Nether and End use fixed lighting and atmosphere.
+- Overworld Surface also offers **Clouds**, **Rain** and **Thunderstorm** checkboxes.
+  Clouds start on; cosmetic weather starts off. These visual preferences survive reloads.
+  Rain adapts its particle budget when rendering slows down. Caves, Nether and End hide
+  both effects. See [clouds and weather](../../docs/clouds-weather.md) for host options,
+  rendering limits and the embed 3 contract.
 - F3 shows the frame rate, the backend, and streaming statistics. It also has switches for the
   edge fog and two experimental options: zooming out to 20,000 blocks and a custom render
   distance from 2,000 to 100,000 blocks.

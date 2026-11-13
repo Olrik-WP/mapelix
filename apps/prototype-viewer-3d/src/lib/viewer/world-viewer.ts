@@ -25,6 +25,8 @@ import {
 } from "@mapelix/scene-prototype/discoveries";
 
 import { Atmosphere } from "./atmosphere";
+import { CloudLayer } from "./cloud-layer";
+import { WeatherLayer, weatherMode, type WeatherMode } from "./weather-layer";
 import {
   CameraRig,
   ZOOM_LIMIT,
@@ -59,9 +61,14 @@ export interface WorldInfo extends SceneContextInput {
 
 export type { CameraView, VerticalMovement } from "./camera-rig";
 export type { DiscoveryDetailText } from "./discovery-focus";
+export type { WeatherMode } from "./weather-layer";
 
 /** Kept across view switches so embedding does not fall back to a different server. */
 export interface WorldViewerOptions {
+  /** Animated block clouds in Overworld Surface views (default true). */
+  readonly clouds?: boolean;
+  /** Cosmetic Overworld Surface weather only, independent of the server (default clear). */
+  readonly weather?: WeatherMode;
   /** Host metadata loader for depth/discovery transitions; retains host URL/authentication. */
   readonly loadDepth?: (context: SceneContext, signal: AbortSignal) => Promise<WorldInfo>;
   /** Emitted after automatic depth or discovery navigation changes context. */
@@ -125,6 +132,10 @@ export class WorldViewer {
   private readonly scene = new Scene();
   private readonly camera = new PerspectiveCamera(50, 1, 1, 12000);
   private readonly atmosphere = new Atmosphere();
+  private readonly clouds: CloudLayer;
+  private readonly weather: WeatherLayer;
+  private sunIntensity = 3;
+  private skyIntensity = 2.6;
   private readonly sun = new DirectionalLight(0xffffff, 3);
   private readonly sky = new HemisphereLight(0xb9d3ec, 0x8a7a62, 1.4);
   private streamer: RegionStreamer;
@@ -184,6 +195,10 @@ export class WorldViewer {
     );
     this.atmosphere.setDimension(world.dimension);
     this.atmosphere.setCaves(this.context.mode === "caves");
+    this.clouds = new CloudLayer(this.atmosphere, options.clouds);
+    this.clouds.setContext(this.context);
+    this.weather = new WeatherLayer(this.atmosphere, options.weather);
+    this.weather.setContext(this.context);
     this.renderer = renderer;
     container.append(renderer.domElement);
     renderer.domElement.tabIndex = 0;
@@ -206,6 +221,8 @@ export class WorldViewer {
     this.materials = createSceneMaterials(this.atmosphere, this.selectionBox.mask);
     this.streamer = this.createStreamer(world);
     this.scene.add(this.streamer.root, this.sky, this.sun, this.sun.target, this.selectionBox.root);
+    this.scene.add(this.clouds.root);
+    this.scene.add(this.weather.root);
     this.scene.backgroundNode = this.atmosphere.sky(normalWorldGeometry);
     this.scene.fogNode = this.atmosphere.fogNode;
 
@@ -294,6 +311,7 @@ export class WorldViewer {
     start: Partial<CameraView> = {},
     options: WorldViewerOptions = {},
   ): Promise<WorldViewer> {
+    if (options.weather !== undefined) weatherMode(options.weather);
     if (options.selection) horizontalSelection(options.selection);
     if (
       options.autoDepthIntervalMs !== undefined &&
@@ -353,10 +371,11 @@ export class WorldViewer {
     this.hour = hour;
     const daylight = this.atmosphere.setTimeOfDay(hour);
     this.sun.color.copy(daylight.sunColor);
-    this.sun.intensity = daylight.sunIntensity;
+    this.sunIntensity = daylight.sunIntensity;
     this.sky.color.copy(daylight.skyColor);
     this.sky.groundColor.copy(daylight.groundColor);
-    this.sky.intensity = daylight.ambientIntensity * 3.1;
+    this.skyIntensity = daylight.ambientIntensity * 3.1;
+    this.applyWeatherLighting();
     this.sunDirection.copy(daylight.direction);
     this.glow.strength.value = MathUtils.lerp(0.9, 0.45, daylight.daylight);
     this.shadowKey = "";
@@ -383,6 +402,8 @@ export class WorldViewer {
     this.scene.add(this.streamer.root);
     this.atmosphere.setDimension(world.dimension);
     this.atmosphere.setCaves(this.context.mode === "caves");
+    this.clouds.setContext(this.context);
+    this.weather.setContext(this.context);
     this.setTimeOfDay(this.hour);
     this.rig.setVerticalWindow(
       this.context.mode === "caves" ? this.context : undefined,
@@ -436,6 +457,25 @@ export class WorldViewer {
   /** Fades terrain into the sky before the edge of the loaded area, or lets the edge show. */
   setEdgeFade(enabled: boolean): void {
     this.atmosphere.edgeFade.value = enabled ? 1 : 0;
+  }
+
+  /** Retains the preference through dimension/depth switches; no terrain requests. */
+  setClouds(enabled: boolean): void {
+    this.clouds.setEnabled(enabled);
+  }
+
+  /** Cosmetic only; unsupported dimensions/views suspend it without changing this choice. */
+  setWeather(mode: WeatherMode): void {
+    this.weather.setMode(mode);
+  }
+
+  private applyWeatherLighting(): void {
+    const rain = this.atmosphere.rain.value,
+      storm = this.atmosphere.storm.value;
+    this.sun.intensity =
+      this.sunIntensity * (1 - rain * 0.55 - storm * 0.2) + this.atmosphere.lightning.value * 2;
+    this.sky.intensity =
+      this.skyIntensity * (1 - rain * 0.2 - storm * 0.15) + this.atmosphere.lightning.value;
   }
 
   /**
@@ -633,6 +673,8 @@ export class WorldViewer {
     this.selectionBox.dispose();
     this.discoveries.dispose();
     this.discoveryDetails.dispose();
+    this.clouds.dispose();
+    this.weather.dispose();
     this.streamer.dispose();
     this.explorationRequests.dispose();
     this.meshPool.dispose();
@@ -649,7 +691,8 @@ export class WorldViewer {
 
   private frame(): void {
     this.timer.update();
-    const delta = Math.min(this.timer.getDelta(), 0.1);
+    const frameDelta = this.timer.getDelta();
+    const delta = Math.min(frameDelta, 0.1);
     const moved = this.rig.update(delta);
     if (moved) this.fitViewDistance();
     if (moved || this.regionsChanged || this.frames % 15 === 0) {
@@ -686,6 +729,15 @@ export class WorldViewer {
       this.renderer.domElement,
     );
     this.updateShadow();
+    this.weather.update(
+      delta,
+      frameDelta,
+      this.camera.position,
+      this.streamer.surfaceRevision,
+      (x, z) => this.streamer.exactHeightAt(x, z) ?? this.streamer.heightAt(x, z),
+    );
+    this.applyWeatherLighting();
+    this.clouds.update(delta, this.camera.position);
     this.regionsChanged = false;
     this.pipeline.render();
     this.countFrame();

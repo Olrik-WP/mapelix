@@ -139,6 +139,15 @@ export class Atmosphere {
   readonly edgeFade = uniform(1);
   /** 1 in daylight and 0 at night, for effects that change with the light, like glowing blocks. */
   readonly daylight = uniform(1);
+  readonly rain = uniform(0);
+  readonly storm = uniform(0);
+  readonly lightning = uniform(0);
+
+  private readonly weatherTint = Fn(([base]: [Node<"vec3">]) =>
+    mix(base, vec3(0.14, 0.18, 0.23), this.rain.mul(0.72))
+      .mul(float(1).sub(this.storm.mul(0.3)))
+      .add(vec3(0.65, 0.73, 0.9).mul(this.lightning)),
+  );
 
   /** Sky radiance in a world direction. The sun disc is bright enough to bloom. */
   readonly sky = Fn(([direction]: [Node<"vec3">]) => {
@@ -162,7 +171,11 @@ export class Atmosphere {
     const toMoon = max(dot(direction, this.sunDirection.negate()), 0);
     const moon = smoothstep(0.99965, 0.9998, toMoon).mul(2.2).add(toMoon.pow(40).mul(0.12));
     const nightSky = vec3(0.85, 0.9, 1).mul(stars.add(moon)).mul(night);
-    return select(this.environment.equal(0), base.add(glow).add(disc).add(nightSky), base);
+    return select(
+      this.environment.equal(0),
+      this.weatherTint(base.add(glow.add(disc).add(nightSky).mul(float(1).sub(this.rain)))),
+      base,
+    );
   });
 
   /** Haze color along a view direction, flattened toward the horizon and without the disc. */
@@ -170,7 +183,9 @@ export class Atmosphere {
     const flattened = normalize(vec3(direction.x, max(direction.y.mul(0.35), 0.015), direction.z));
     const toSun = max(dot(flattened, this.sunDirection), 0);
     const base = mix(this.horizon, this.zenith, flattened.y.pow(0.42));
-    return base.add(this.sunColor.mul(toSun.pow(6).mul(0.22)));
+    return this.weatherTint(
+      base.add(this.sunColor.mul(toSun.pow(6).mul(0.22)).mul(float(1).sub(this.rain))),
+    );
   });
 
   /**
@@ -191,7 +206,13 @@ export class Atmosphere {
       exp(cameraHeight.negate()).sub(exp(pointHeight.negate())).div(rise),
     );
     const density = select(this.environment.equal(0), meanDensity, float(1));
-    const haze = float(1).sub(exp(distance.mul(density).mul(2.1).div(this.hazeDistance).negate()));
+    const weatherDensity = this.rain.mul(this.storm.mul(0.0015).add(0.0011));
+    const extinction = distance
+      .mul(density)
+      .mul(2.1)
+      .div(this.hazeDistance)
+      .add(distance.mul(weatherDensity));
+    const haze = float(1).sub(exp(extinction.negate()));
     const edgeStart = this.viewDistance.mul(0.7);
     const edge = smoothstep(edgeStart, this.viewDistance.mul(0.97), distance).mul(this.edgeFade);
     const direction = normalize(positionWorld.sub(cameraPosition));
