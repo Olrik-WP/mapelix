@@ -108,6 +108,8 @@ describe("exact exterior visibility", () => {
       ),
     );
     expect(collider.hasBlockFace(4, 72, 8, 0, 1)).toBe(true);
+    expect(collider.hasBlockFace(4, 72, 8)).toBe(true);
+    expect(collider.hasBlockFace(5, 72, 8)).toBe(false);
     expect(collider.hasBlockFace(5, 72, 8, 0, -1)).toBe(false);
     expect(collider.hasBlockFace(4, 74, 8, 0, 1)).toBe(false);
     expect(collider.hasBlockFace(3, 72, 8, 0, 1)).toBe(false);

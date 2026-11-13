@@ -14,7 +14,7 @@ import {
 /** Cooperatively filter source tiles using loaded terrain, preserving cached packets. */
 export function* surfaceDiscoveryTiles(
   tiles: readonly DiscoveryTile[],
-  visible: (x: number, y: number, z: number) => boolean,
+  visible: (x: number, y: number, z: number, kind: number) => boolean,
 ): Generator<void, readonly DiscoveryTile[]> {
   const result: DiscoveryTile[] = [];
   let scanned = 0;
@@ -23,7 +23,8 @@ export function* surfaceDiscoveryTiles(
     for (const word of tile.blocks) {
       if (++scanned % 256 === 0) yield;
       const block = unpackDiscoveryBlock(tile, word);
-      if (block.exposure === "exposed" && visible(block.x, block.y, block.z)) words.push(word);
+      if (block.exposure === "exposed" && visible(block.x, block.y, block.z, block.kind))
+        words.push(word);
     }
     result.push({ ...tile, blocks: Uint32Array.from(words) });
   }

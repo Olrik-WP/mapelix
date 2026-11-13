@@ -166,7 +166,13 @@ function createTerrainMaterial(atmosphere: Atmosphere): MeshStandardNodeMaterial
   const contact = mix(float(0.8), float(1), quadOcclusion);
   const glowing = quadMaterial.equal(QuadMaterial.Emissive);
   const bevel = select(glowing, float(1), blockBevel());
-  material.colorNode = coveredSoil().mul(variation).mul(bevel).mul(contact);
+  const wet = atmosphere.rain.mul(normalWorld.y.max(0)).mul(select(foliage.or(glowing), 0, 1));
+  material.colorNode = coveredSoil()
+    .mul(variation)
+    .mul(bevel)
+    .mul(contact)
+    .mul(float(1).sub(wet.mul(0.12)));
+  material.roughnessNode = mix(1, 0.24, wet);
   material.aoNode = quadOcclusion;
   // Lamps glow harder at night, bright enough for the bloom pass to pick them up.
   const glow = mix(float(4.2), float(1.4), atmosphere.daylight);

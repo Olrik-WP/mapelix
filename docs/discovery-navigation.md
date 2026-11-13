@@ -5,10 +5,12 @@ Scene-server, Bedrock Control, Claude's integration worktree, engine packages an
 production are unchanged. No HTTP, region format, discovery schema or cache-key
 revision changes are required. Keep **EMBED_API_VERSION=3**.
 
-The Surface/keyboard corrections after `fe82288` add no public options or methods.
+The Surface/keyboard corrections in `e5881b3` add no public options or methods.
 Hosts only need to update the descent hint from Shift to C and keep using
 `focusDiscovery` and the existing context callback. Source cache identities and
 configurable URL bases/`.bin` suffixes are preserved.
+The subsequent optional `formatDiscoveryLabel` option and roofed-container
+visibility are described in [immediate discovery labels](discovery-labels.md).
 
 ## Keyboard and selection tools
 
@@ -54,6 +56,10 @@ LOD heights cannot certify visibility. Existing LOD-0 cached terrain is reused;
 no extra terrain/index requests are forced. Distant markers may therefore appear
 only after zooming in and loading exact terrain. Arrival or eviction of exact
 terrain automatically invalidates derived groups and reuses cached source tiles.
+Containers may additionally qualify through an actual owned face in the cached
+LOD-0 Surface mesh, keeping visible rooms beneath roofs discoverable. Sealed
+underground containers discarded by that mesh remain excluded; the ore rule
+above is unchanged. Search all heights stays unchecked by default.
 
 Activating discoveries never changes mode. From Surface, clicking a certified
 exterior object stays in Surface; any other object opens its 16/32-block

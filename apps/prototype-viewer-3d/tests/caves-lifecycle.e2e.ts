@@ -66,6 +66,7 @@ test("104 real view switches retain bounded GPU/CPU resources and release the re
       document.getElementById("viewer")!,
       worlds[0],
       { x: 16, y: 80, z: 16, distance: 80, pitch: 0.8, heading: 0.4 },
+      { weather: "thunderstorm" },
     );
     window.__undergroundViewer = viewer;
     const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

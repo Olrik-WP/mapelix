@@ -30,7 +30,13 @@
   import { selectionAround, type HorizontalSelection } from "@mapelix/scene-prototype/selection";
   import type { SelectionTool } from "$lib/viewer/selection-box";
   import { readViewFromUrl, writeViewToUrl } from "$lib/view-url";
-  import type { Pointed, ViewerSnapshot, WorldInfo, WorldViewer } from "$lib/viewer/world-viewer";
+  import type {
+    Pointed,
+    ViewerSnapshot,
+    WorldInfo,
+    WorldViewer,
+    WeatherMode,
+  } from "$lib/viewer/world-viewer";
 
   const DEFAULT_HOUR = 15.5;
 
@@ -42,6 +48,8 @@
   let hour = $state(DEFAULT_HOUR);
   let debugVisible = $state(false);
   let edgeFade = $state(true);
+  let clouds = $state(true);
+  let weather = $state<WeatherMode>("clear");
   let customRenderDistance = $state(false);
   let renderDistance = $state(32_000);
   let zoomUnlocked = $state(false);
@@ -68,7 +76,27 @@
   });
 
   $effect(() => {
+    if (!viewer) return;
+    viewer.setClouds(clouds);
+    try {
+      localStorage.setItem("mapelix-clouds-v1", clouds ? "1" : "0");
+    } catch {
+      /* Visual preferences are optional. */
+    }
+  });
+
+  $effect(() => {
     viewer?.setRenderDistance(customRenderDistance ? renderDistance : undefined);
+  });
+
+  $effect(() => {
+    if (!viewer) return;
+    viewer.setWeather(weather);
+    try {
+      localStorage.setItem("mapelix-weather-v1", weather);
+    } catch {
+      /* Visual preferences are optional. */
+    }
   });
 
   $effect(() => {
@@ -109,6 +137,17 @@
       return;
     }
     dimension = start.context.dimension;
+    try {
+      clouds = localStorage.getItem("mapelix-clouds-v1") !== "0";
+    } catch {
+      clouds = true;
+    }
+    try {
+      const stored = localStorage.getItem("mapelix-weather-v1");
+      weather = stored === "rain" || stored === "thunderstorm" ? stored : "clear";
+    } catch {
+      weather = "clear";
+    }
     ceilingY = start.context.ceilingY;
     mode = start.context.mode;
     sliceMinY = start.context.minY;
@@ -183,6 +222,8 @@
       world = info;
       updateContext(info);
       created = await WorldViewer.create(element, info, start.view, {
+        clouds,
+        weather,
         ...(start.selection ? { selection: start.selection } : {}),
         discoveryFilters: initialDiscoveries,
         autoDepth: initialAutoDepth,
@@ -378,6 +419,28 @@
           <option value="surface">Surface</option>
           <option value="caves">Caves</option>
         </select>
+        {#if mode === "surface" && dimension === "overworld"}
+          <label><input type="checkbox" bind:checked={clouds} /> Clouds</label>
+          <label
+            ><input
+              type="checkbox"
+              checked={weather !== "clear"}
+              onchange={(event) => {
+                weather = event.currentTarget.checked ? "rain" : "clear";
+              }}
+            /> Rain</label
+          >
+          <label
+            ><input
+              type="checkbox"
+              checked={weather === "thunderstorm"}
+              disabled={weather === "clear"}
+              onchange={(event) => {
+                weather = event.currentTarget.checked ? "thunderstorm" : "rain";
+              }}
+            /> Thunderstorm</label
+          >
+        {/if}
         {#if mode === "caves"}
           <label for="cave-thickness">Slice thickness</label>
           <select

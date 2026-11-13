@@ -53,6 +53,8 @@ An unvisited dimension displays empty space until the copied world contains chun
   finds blocks outside the current slice. In Surface mode, leave it off for objects
   verified on the exterior surface; enable it to include covered objects as well.
   Exact terrain must be loaded to certify visibility; zoom in if needed.
+  Containers in rooms beneath roofs remain discoverable when their faces exist in the
+  detailed Surface mesh. Mouse hover or keyboard focus shows an immediate marker label.
   Clicking a verified surface object stays on Surface; any other object opens its cave slice.
   From Caves, navigation retains Caves and opens another slice when needed.
   Framing preserves orientation, approaches moderately and opens one details card.
@@ -66,6 +68,11 @@ An unvisited dimension displays empty space until the copied world contains chun
 - Enter X and Z coordinates to fly there. The house button returns to spawn.
 - The compass turns the view to face north.
 - The Overworld slider sets the time of day. Nether and End use fixed lighting and atmosphere.
+- Overworld Surface also offers **Clouds**, **Rain** and **Thunderstorm** checkboxes.
+  Clouds start on; cosmetic weather starts off. These visual preferences survive reloads.
+  Rain adapts its particle budget when rendering slows down. Caves, Nether and End hide
+  both effects. See [clouds and weather](../../docs/clouds-weather.md) for host options,
+  rendering limits and the embed 3 contract.
 - F3 shows the frame rate, the backend, and streaming statistics. It also has switches for the
   edge fog and two experimental options: zooming out to 20,000 blocks and a custom render
   distance from 2,000 to 100,000 blocks.
@@ -97,6 +104,8 @@ Optional automatic-depth loading, mobile methods and the backwards-compatible em
 handoff are described in [cave navigation](../../docs/cave-navigation.md).
 Discovery framing, the Surface proximity rule and optional translated/host-owned
 details are described in [discovery navigation](../../docs/discovery-navigation.md).
+Immediate labels and the optional host label formatter are described in
+[discovery labels](../../docs/discovery-labels.md).
 
 ## Validation
 

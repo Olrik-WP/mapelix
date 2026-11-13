@@ -165,6 +165,17 @@ export class RegionStreamer {
     );
   }
 
+  /** Rooms under a roof may be part of Surface; sealed underground rooms are culled. */
+  isRenderedSurfaceBlock(x: number, y: number, z: number): boolean {
+    if (this.context.mode !== "surface") return false;
+    const span = regionSpan(0);
+    return (
+      this.cache
+        .get(regionKey(0, Math.floor(x / span), Math.floor(z / span)))
+        ?.mesh?.collider.hasBlockFace(x, y, z) ?? false
+    );
+  }
+
   constructor(options: StreamingOptions) {
     this.options = options;
     this.explorationRequests =

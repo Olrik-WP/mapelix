@@ -15,7 +15,12 @@ export default async function setupWorld(): Promise<void> {
     sectionRecord(0, 2, 0, 5, (x, y, z) => {
       if (y === 80) return "minecraft:stone";
       if (y === 81 && z === 8 && x === 40) return "minecraft:chest";
+      if (y === 81 && z === 8 && x === 41) return "minecraft:chest";
       if (y === 81 && z === 8 && x === 44) return "minecraft:barrel";
+      if (x >= 36 && x <= 46 && z >= 4 && z <= 12 && y >= 81 && y <= 85) {
+        if (y === 85 || x === 36 || x === 46 || z === 12 || (z === 4 && x !== 40))
+          return "minecraft:oak_planks";
+      }
       return "minecraft:air";
     }),
     biomeRecord(
@@ -26,6 +31,7 @@ export default async function setupWorld(): Promise<void> {
     ),
     ...[4, 5].map((section) =>
       sectionRecord(0, 3, 0, section, (x, y, z) => {
+        if (x === 54 && y === 74 && z === 8) return "minecraft:barrel";
         if (
           (x === 60 && y === 75 && z >= 8 && z <= 10) ||
           (x === 52 && y === 73 && z === 8) ||
