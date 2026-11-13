@@ -1,5 +1,12 @@
 # Native dimensions: Milestone 1
 
+The subsequent [block-model and lava lot](block-models-and-lava.md), after color
+commits `54c7a6c` and `855d98f`, retains the integration contract below: configured
+base path, `.bin`, dimension/ceiling cache separation and API/viewer version 2.
+Its optional quad extensions retain region format 2; prototype mesh revision is
+`23`. Claude's scene server, embed options, URL construction and integration
+worktrees are untouched. General cave exploration remains separate.
+
 Work starts from fork main `da1c879` on `feature/native-dimensions`, in the independent
 `mapelix-engine` worktree. The Bedrock Control integration worktree is outside this change.
 

@@ -49,6 +49,7 @@ import {
 } from "three/tsl";
 
 import type { Atmosphere } from "../atmosphere";
+import { createLavaMaterial } from "./lava";
 import {
   quadColor,
   quadCovered,
@@ -71,6 +72,7 @@ export interface MaterialPair {
 
 export interface SceneMaterials {
   readonly terrain: MaterialPair;
+  readonly lava: MaterialPair;
   readonly plants: MaterialPair;
   readonly water: MaterialPair;
   readonly glass: MaterialPair;
@@ -79,6 +81,7 @@ export interface SceneMaterials {
 export function createSceneMaterials(atmosphere: Atmosphere): SceneMaterials {
   return {
     terrain: withFading(createTerrainMaterial(atmosphere)),
+    lava: withFading(createLavaMaterial(atmosphere)),
     plants: withFading(createPlantMaterial(), plantMask()),
     water: withFading(createWaterMaterial(atmosphere)),
     glass: withFading(createGlassMaterial(atmosphere)),

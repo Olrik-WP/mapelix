@@ -1,5 +1,6 @@
 import type { LittleEndianNbtCompoundValue } from "@mapelix/prototype/bedrock";
 
+import { BEDROCK_COLOR_STATES } from "../blocks/bedrock-colors.js";
 import {
   resolveBlockAppearance,
   type BiomeTint,
@@ -8,6 +9,7 @@ import {
   type SurfaceMaterial,
 } from "../blocks/block-appearance.js";
 import { Face, PlantSprite, QuadMaterial } from "../format.js";
+import { MODEL_STATES, blockModelParts, type BlockModel } from "../blocks/block-models.js";
 
 /** Shape codes stored per palette id. */
 export const Shape = {
@@ -17,6 +19,8 @@ export const Shape = {
   Water: 3,
   Glass: 4,
   Plant: 5,
+  Model: 6,
+  Lava: 7,
 } as const;
 
 /** What a block becomes in the voxel levels, which draw every block as a cube. */
@@ -29,6 +33,7 @@ export const VoxelKind = {
   Glass: 5,
   /** A thin layer, such as snow or a carpet, that colors the top of the block below. */
   Layer: 6,
+  Lava: 7,
 } as const;
 
 /** Boxes that fill at least this share of their block become whole voxels. */
@@ -67,6 +72,7 @@ const PLANT_HEIGHTS: Readonly<Record<PlantSprite, number>> = {
 
 /** State keys that change a block's appearance. Other states would only split cache entries. */
 const APPEARANCE_STATES = [
+  ...MODEL_STATES,
   "minecraft:vertical_half",
   "top_slot_bit",
   "height",
@@ -85,6 +91,7 @@ const APPEARANCE_STATES = [
   "sand_type",
   "dirt_type",
 ];
+const APPEARANCE_STATE_KEYS: ReadonlySet<string> = new Set(APPEARANCE_STATES);
 
 /**
  * Flat, id-indexed tables of block appearances. Id 0 is air. The mesher's inner
@@ -97,6 +104,7 @@ export class BlockPalette {
   boxInset = new Uint8Array(256);
   boxTop = new Uint8Array(256);
   sprite = new Uint8Array(256);
+  readonly models: Array<BlockModel | undefined> = [];
   /** 1 when the block's sides are soil under a strip of its top color. */
   covered = new Uint8Array(256);
   /** `VoxelKind` of each block in the coarse voxel levels. */
@@ -125,7 +133,7 @@ export class BlockPalette {
   }
 
   isOpaque(id: number): boolean {
-    return this.shape[id] === Shape.Cube;
+    return this.shape[id] === Shape.Cube || this.shape[id] === Shape.Lava;
   }
 
   private write(id: number, appearance: BlockAppearance): void {
@@ -159,6 +167,17 @@ export class BlockPalette {
         this.material[id] = QuadMaterial.Plant;
         this.sprite[id] = shape.sprite;
         this.setBox(id, PLANT_HEIGHTS[shape.sprite], 2, false);
+        break;
+      case "model":
+        this.shape[id] = Shape.Model;
+        this.material[id] = shape.material;
+        this.models[id] = shape.model;
+        this.setBox(id, 16, 0, false);
+        break;
+      case "lava":
+        this.shape[id] = Shape.Lava;
+        this.material[id] = QuadMaterial.Emissive;
+        this.setBox(id, lavaFill(shape.level), 0, false);
         break;
       default: {
         const unhandled: never = shape;
@@ -208,6 +227,17 @@ export class BlockPalette {
 
 function voxelKindOf(shape: BlockShape): number {
   switch (shape.kind) {
+    case "lava":
+      return VoxelKind.Lava;
+    case "model": {
+      if (shape.material === QuadMaterial.Glass) return VoxelKind.Glass;
+      if (shape.material === QuadMaterial.Emissive) return VoxelKind.Emissive;
+      const volume = blockModelParts(shape.model).reduce(
+        (sum, { bounds: b }) => sum + (b[3] - b[0]) * (b[4] - b[1]) * (b[5] - b[2]),
+        0,
+      );
+      return volume >= MIN_VOXEL_VOLUME * 16 ** 3 ? solidKind(shape.material) : VoxelKind.Air;
+    }
     case "cube":
       return solidKind(shape.material);
     case "box": {
@@ -229,6 +259,11 @@ function voxelKindOf(shape: BlockShape): number {
   }
 }
 
+/** Falling lava fills its column; exposed source lava is 8/9 high, then decreases by depth. */
+export function lavaFill(level: number): number {
+  return level >= 8 ? 16 : Math.max(2, Math.round(((8 - level) * 16) / 9));
+}
+
 function solidKind(material: SurfaceMaterial): number {
   if (material === QuadMaterial.Foliage) return VoxelKind.Foliage;
   return material === QuadMaterial.Emissive ? VoxelKind.Emissive : VoxelKind.Solid;
@@ -243,7 +278,12 @@ function faceAxis(face: number): "x" | "y" | "z" {
 function appearanceKey(name: string, states: LittleEndianNbtCompoundValue | undefined): string {
   if (states === undefined) return name;
   let key = name;
-  for (const state of APPEARANCE_STATES) {
+  const colorStates = BEDROCK_COLOR_STATES[name.replace(/^minecraft:/, "")];
+  const keys = Object.keys(states).filter(
+    (key) => APPEARANCE_STATE_KEYS.has(key) || colorStates?.includes(key),
+  );
+  if (keys.length > 1) keys.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const state of keys) {
     const value = states[state];
     if (typeof value === "string" || typeof value === "number") key += `|${state}=${value}`;
   }

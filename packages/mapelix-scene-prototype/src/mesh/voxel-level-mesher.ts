@@ -3,10 +3,12 @@ import {
   Face,
   QuadList,
   QuadMaterial,
+  QUAD_LAVA_FLAG,
   SOIL_COLOR,
   packQuadWord0,
   packQuadWord1,
   packQuadWord2,
+  partitionLavaQuads,
   type SceneRegion,
 } from "../format.js";
 import { VoxelKind } from "./block-palette.js";
@@ -14,6 +16,7 @@ import type { GeometryMode } from "../dimensions.js";
 import {
   COVER_DEPTH,
   KEY_COVERED,
+  KEY_LAVA,
   NORMAL_LAYER,
   cornerOcclusion,
   faceOf,
@@ -32,6 +35,7 @@ import {
 } from "./voxel-faces.js";
 import { isOpaqueKind, type VoxelBox } from "./voxel-box.js";
 import type { VoxelRegion } from "./voxel-region.js";
+import { lavaFlowDirection } from "./lava-flow.js";
 
 /**
  * Border faces stay when a neighbor hides them this many layers below its top. A
@@ -50,6 +54,7 @@ const MATERIALS: Readonly<Record<number, QuadMaterial>> = {
   [VoxelKind.Emissive]: QuadMaterial.Emissive,
   [VoxelKind.Water]: QuadMaterial.Water,
   [VoxelKind.Glass]: QuadMaterial.Glass,
+  [VoxelKind.Lava]: QuadMaterial.Emissive,
 };
 
 /**
@@ -130,7 +135,7 @@ class VoxelLevelMesher {
       heights: this.heights(),
       minY: Number.isFinite(this.minLayer) ? this.minLayer * voxelSize : 0,
       maxY: Number.isFinite(this.maxLayer) ? this.maxLayer * voxelSize : 0,
-      opaque: this.opaque.finish(),
+      opaque: partitionLavaQuads(this.opaque.finish()),
       plants: empty,
       translucent: this.translucent.finish(),
     };
@@ -240,7 +245,11 @@ class VoxelLevelMesher {
     const neighborLayer = layer + NORMAL_LAYER[face]!;
     const neighborColumn = column + this.steps.column[face]!;
     if (inner) {
-      if (isOpaqueKind(box.kind[neighbor] ?? VoxelKind.Air) || !this.isOpen(index, layer, column)) {
+      const open =
+        kind === VoxelKind.Lava
+          ? this.isOpen(neighbor, neighborLayer, neighborColumn)
+          : this.isOpen(index, layer, column);
+      if (isOpaqueKind(box.kind[neighbor] ?? VoxelKind.Air) || !open) {
         return false;
       }
     } else if (!this.region.explored[neighborColumn]) {
@@ -254,7 +263,22 @@ class VoxelLevelMesher {
       : this.occlusion(face, neighbor, neighborLayer);
     const covered = box.covered[index] === 1 && !isFlatFace(face);
     const key = mergeKey(MATERIALS[kind]!, fill, 0, false, face);
-    keys[mask] = covered ? (key | KEY_COVERED) >>> 0 : key;
+    let lava = 0;
+    if (kind === VoxelKind.Lava) {
+      const heightAt = (step: number) => {
+        const other = index + step;
+        return box.kind[other] === VoxelKind.Lava
+          ? box.fill[other]!
+          : isOpaqueKind(box.kind[other] ?? VoxelKind.Air)
+            ? fill
+            : 0;
+      };
+      lava =
+        KEY_LAVA |
+        (lavaFlowDirection(heightAt(1), heightAt(-1), heightAt(box.width), heightAt(-box.width)) <<
+          12);
+    }
+    keys[mask] = ((covered ? key | KEY_COVERED : key) | lava) >>> 0;
     colors[mask] = packQuadWord2(this.faceColor(index, face), occlusion);
     return true;
   }
@@ -302,7 +326,8 @@ class VoxelLevelMesher {
     const translucent = material === QuadMaterial.Water || material === QuadMaterial.Glass;
     (translucent ? this.translucent : this.opaque).push(
       packQuadWord0(x, y, z, faceOf(face), material, (key & KEY_COVERED) !== 0),
-      packQuadWord1(width, height, keyBox(key), 0),
+      packQuadWord1(width, height, keyBox(key), 0) |
+        ((key & KEY_LAVA) !== 0 ? QUAD_LAVA_FLAG | (((key >>> 12) & 15) << 28) : 0),
       color,
     );
     this.minLayer = Math.min(this.minLayer, y);

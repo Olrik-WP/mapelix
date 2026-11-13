@@ -59,7 +59,12 @@ export class VoxelBox {
 
 /** Solid, foliage, and emissive voxels hide what is behind them. */
 export function isOpaqueKind(kind: number): boolean {
-  return kind === VoxelKind.Solid || kind === VoxelKind.Foliage || kind === VoxelKind.Emissive;
+  return (
+    kind === VoxelKind.Solid ||
+    kind === VoxelKind.Foliage ||
+    kind === VoxelKind.Emissive ||
+    kind === VoxelKind.Lava
+  );
 }
 
 /** What a parent voxel becomes. Opaque parents then pick their kind by majority. */
@@ -152,7 +157,12 @@ function mergeChildren(source: VoxelBox, target: VoxelBox, parent: number): void
   // A covered side draws soil itself and keeps only the color of its strip.
   target.side[parent] = isCovered ? topColor : averageColor(red, green, blue, sides);
   target.covered[parent] = isCovered ? 1 : 0;
-  target.fill[parent] = group === Group.Water ? waterFill(source) : 16;
+  target.fill[parent] =
+    group === Group.Water
+      ? waterFill(source, VoxelKind.Water)
+      : target.kind[parent] === VoxelKind.Lava
+        ? waterFill(source, VoxelKind.Lava)
+        : 16;
 }
 
 function allOpaque(kind: Uint8Array): boolean {
@@ -231,23 +241,26 @@ function opaqueKind(kind: Uint8Array): number {
   let solid = 0;
   let foliage = 0;
   let emissive = 0;
+  let lava = 0;
   for (let index = 0; index < 8; index += 1) {
     const childKind = kind[children[index]!];
     if (childKind === VoxelKind.Solid) solid += 1;
     else if (childKind === VoxelKind.Foliage) foliage += 1;
     else if (childKind === VoxelKind.Emissive) emissive += 2;
+    else if (childKind === VoxelKind.Lava) lava += 2;
   }
-  if (solid >= foliage && solid >= emissive) return VoxelKind.Solid;
-  return foliage >= emissive ? VoxelKind.Foliage : VoxelKind.Emissive;
+  if (solid >= foliage && solid >= emissive && solid >= lava) return VoxelKind.Solid;
+  if (foliage >= emissive && foliage >= lava) return VoxelKind.Foliage;
+  return emissive >= lava ? VoxelKind.Emissive : VoxelKind.Lava;
 }
 
 /** Keeps the water surface at its height within the parent, in sixteenths. */
-function waterFill(source: VoxelBox): number {
+function waterFill(source: VoxelBox, fluid: number): number {
   let upper = 0;
   let lower = 0;
   for (let index = 0; index < 8; index += 1) {
     const child = children[index]!;
-    if (source.kind[child] !== VoxelKind.Water) continue;
+    if (source.kind[child] !== fluid) continue;
     if (index >= 4) upper = Math.max(upper, source.fill[child]!);
     else lower = Math.max(lower, source.fill[child]!);
   }

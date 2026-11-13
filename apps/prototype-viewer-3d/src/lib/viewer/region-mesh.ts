@@ -1,4 +1,9 @@
-import { QuadMaterial, unpackQuad, type DecodedSceneRegion } from "@mapelix/scene-prototype/format";
+import {
+  QuadMaterial,
+  unpackQuad,
+  isLavaQuad,
+  type DecodedSceneRegion,
+} from "@mapelix/scene-prototype/format";
 import {
   Box3,
   BufferAttribute,
@@ -24,7 +29,7 @@ interface Layer {
   readonly materials: MaterialPair;
 }
 
-/** One streamed region: up to four instanced meshes that share the scene materials. */
+/** One streamed region: shared terrain, lava, plants, water and glass materials. */
 export class RegionMesh {
   readonly region: DecodedSceneRegion;
   readonly group = new Group();
@@ -51,7 +56,15 @@ export class RegionMesh {
       new Vector3(0, low, 0),
       new Vector3(region.gridSize, high, region.gridSize),
     );
-    this.add(region.opaque, materials.terrain, bounds, { castShadow: true, renderOrder: 0 });
+    const lavaStart = firstLavaQuad(region.opaque);
+    this.add(region.opaque.subarray(0, lavaStart), materials.terrain, bounds, {
+      castShadow: true,
+      renderOrder: 0,
+    });
+    this.add(region.opaque.subarray(lavaStart), materials.lava, bounds, {
+      castShadow: true,
+      renderOrder: 0,
+    });
     // Grass and flowers do not cast shadows in Minecraft, and skipping them keeps shadows cheap.
     this.add(region.plants, materials.plants, bounds, { castShadow: false, renderOrder: 1 });
     const { water, glass } = splitGlass(region.translucent);
@@ -109,6 +122,14 @@ export class RegionMesh {
     this.group.add(mesh);
     this.layers.push({ mesh, materials });
   }
+}
+
+/** Engine output groups lava at the end; old regions have none. Both layers share the input buffer. */
+export function firstLavaQuad(words: Uint32Array): number {
+  for (let offset = 0; offset < words.length; offset += 3) {
+    if (isLavaQuad(words[offset]!, words[offset + 1]!)) return offset;
+  }
+  return words.length;
 }
 
 /** Separates the glass quads of a translucent list from its water quads. */

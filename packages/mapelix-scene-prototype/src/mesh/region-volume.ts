@@ -58,7 +58,15 @@ export function buildRegionVolume(
       regionHasChunks ||= insideRegion;
       loaded[row * CHUNKS_PER_SIDE + column] = chunk;
       for (const section of chunk.sections) {
-        if (section.y * 16 < ceilingY) writeSection(cells, palette, section, column * 16, row * 16);
+        if (section.y * 16 < ceilingY)
+          writeSection(
+            cells,
+            palette,
+            section,
+            column * 16,
+            row * 16,
+            chunk.bedColors.get(section.y),
+          );
       }
     }
   }
@@ -98,9 +106,10 @@ function writeSection(
   section: DecodedSubchunk,
   offsetX: number,
   offsetZ: number,
+  bedColors?: ReadonlyMap<number, number>,
 ): void {
   if (section.y < WORLD_MIN_Y / 16 || section.y >= WORLD_MAX_Y / 16) return;
-  const blocks = sectionCells(section, palette);
+  const blocks = sectionCells(section, palette, bedColors);
   const baseY = section.y * 16;
   for (let index = 0; index < 4096; index += 1) {
     const cell = blocks[index]!;
@@ -115,7 +124,11 @@ function writeSection(
  * The palette ids of a subchunk's blocks in Bedrock's order, `x * 256 + z * 16 + y`,
  * with `WATERLOGGED` set on blocks that hold water.
  */
-export function sectionCells(section: DecodedSubchunk, palette: BlockPalette): Uint16Array {
+export function sectionCells(
+  section: DecodedSubchunk,
+  palette: BlockPalette,
+  bedColors?: ReadonlyMap<number, number>,
+): Uint16Array {
   const storage = section.primary;
   const ids = Uint16Array.from(storage.palette, (name, index) =>
     palette.idFor(name, storage.states?.[index]),
@@ -128,6 +141,15 @@ export function sectionCells(section: DecodedSubchunk, palette: BlockPalette): U
     const logged =
       waterLayer !== undefined && waterIds?.[waterLayer.indexes[index]!] === true ? WATERLOGGED : 0;
     cells[index] = ids[storage.indexes[index]!]! | logged;
+  }
+  if (bedColors !== undefined) {
+    for (const [index, color] of bedColors) {
+      const id = storage.indexes[index]!;
+      const name = storage.palette[id];
+      if (name !== "minecraft:bed" && name !== "bed") continue;
+      cells[index] =
+        palette.idFor(name, { ...storage.states?.[id], color }) | (cells[index]! & WATERLOGGED);
+    }
   }
   return cells;
 }
@@ -145,7 +167,7 @@ function scanColumn(
     if (topBlock[column] === NO_BLOCK && (shape !== Shape.Empty || cell & WATERLOGGED)) {
       topBlock[column] = y;
     }
-    if (shape === Shape.Cube) {
+    if (shape === Shape.Cube || shape === Shape.Lava) {
       topSolid[column] = y;
       return;
     }

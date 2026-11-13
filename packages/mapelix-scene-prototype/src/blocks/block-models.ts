@@ -1,0 +1,491 @@
+import type { LittleEndianNbtCompoundValue } from "@mapelix/prototype/bedrock";
+import type { ModelBounds } from "../model-boxes.js";
+export type { ModelBounds } from "../model-boxes.js";
+
+/** Axis-aligned model bounds, in sixteenths of a block: low xyz, then high xyz. */
+export interface ModelPart {
+  readonly bounds: ModelBounds;
+  /** An untinted detail, such as a bed leg or pillow; otherwise use the block palette. */
+  readonly color?: number;
+}
+
+export type ModelFamily =
+  | "stairs"
+  | "door"
+  | "trapdoor"
+  | "fence"
+  | "gate"
+  | "wall"
+  | "pane"
+  | "scaffolding"
+  | "bed"
+  | "chorus"
+  | "chorus-flower"
+  | "lantern"
+  | "pot"
+  | "rod"
+  | "chain"
+  | "ladder"
+  | "candle"
+  | "cake"
+  | "cauldron"
+  | "hopper";
+
+export interface BlockModel {
+  readonly family: ModelFamily;
+  readonly block: string;
+  readonly states: LittleEndianNbtCompoundValue;
+}
+export interface ModelNeighbor {
+  readonly opaque: boolean;
+  readonly glass?: boolean;
+  readonly model?: BlockModel | undefined;
+}
+export type ModelNeighbors = (dx: number, dy: number, dz: number) => ModelNeighbor;
+
+/** State names come from the supplied Bedrock 1.26.60.5 block registry. */
+export const MODEL_STATES = [
+  "direction",
+  "weirdo_direction",
+  "minecraft:cardinal_direction",
+  "minecraft:corner",
+  "open_bit",
+  "door_hinge_bit",
+  "upper_block_bit",
+  "upside_down_bit",
+  "head_piece_bit",
+  "minecraft:connection_east",
+  "minecraft:connection_west",
+  "minecraft:connection_south",
+  "minecraft:connection_north",
+  "minecraft:connection_up",
+  "minecraft:connection_down",
+  "wall_connection_type_east",
+  "wall_connection_type_west",
+  "wall_connection_type_south",
+  "wall_connection_type_north",
+  "wall_post_bit",
+  "stability",
+  "hanging",
+  "facing_direction",
+  "pillar_axis",
+  "candles",
+  "lit",
+  "bite_counter",
+  "liquid_depth",
+] as const;
+
+export function resolveBlockModel(
+  block: string,
+  states: LittleEndianNbtCompoundValue,
+): BlockModel | undefined {
+  let family: ModelFamily | undefined;
+  if (block.endsWith("_stairs")) family = "stairs";
+  else if (/(?:^|_)trapdoor$/.test(block)) family = "trapdoor";
+  else if (/(?:^|_)door$/.test(block)) family = "door";
+  else if (/(?:^|_)fence_gate$/.test(block)) family = "gate";
+  else if (/(?:^|_)fence$/.test(block)) family = "fence";
+  else if (block.endsWith("_wall")) family = "wall";
+  else if (block.endsWith("glass_pane") || block === "iron_bars") family = "pane";
+  else if (block === "scaffolding") family = "scaffolding";
+  else if (block === "bed" || block.endsWith("_bed")) family = "bed";
+  else if (block === "chorus_plant") family = "chorus";
+  else if (block === "chorus_flower") family = "chorus-flower";
+  else if (/^(?:soul_|copper_)?lantern$/.test(block)) family = "lantern";
+  else if (block === "flower_pot") family = "pot";
+  else if (block === "end_rod") family = "rod";
+  else if (block === "chain" || block.endsWith("_chain")) family = "chain";
+  else if (block === "ladder") family = "ladder";
+  else if (/(?:^|_)candle$/.test(block)) family = "candle";
+  else if (block === "cake" || block === "candle_cake") family = "cake";
+  else if (block === "cauldron" || block === "lava_cauldron") family = "cauldron";
+  else if (block === "hopper") family = "hopper";
+  if (family === undefined) return undefined;
+  const modelStates = Object.fromEntries(
+    MODEL_STATES.flatMap((key) => (states[key] === undefined ? [] : [[key, states[key]]])),
+  );
+  return { family, block, states: modelStates };
+}
+
+const EMPTY_NEIGHBORS: ModelNeighbors = () => ({ opaque: false });
+// Horizontal directions in Face order: east, west, south, north.
+const DIRECTIONS = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+] as const;
+const CONNECTIONS = ["east", "west", "south", "north"] as const;
+const part = (bounds: ModelBounds, color?: number): ModelPart =>
+  color === undefined ? { bounds } : { bounds, color };
+const isSet = (value: unknown): boolean => value === 1 || value === true;
+const numberState = (s: LittleEndianNbtCompoundValue, key: string, fallback = 0): number =>
+  typeof s[key] === "number" ? s[key] : fallback;
+
+/** Rotation from a model pointing south, clockwise as seen from above. */
+export function modelFacing(states: LittleEndianNbtCompoundValue, stairs = false): number {
+  const cardinal = states["minecraft:cardinal_direction"];
+  if (typeof cardinal === "string") {
+    const facing = ["south", "west", "north", "east"].indexOf(cardinal);
+    if (facing >= 0) return facing;
+  }
+  if (stairs || states.weirdo_direction !== undefined)
+    return [3, 1, 0, 2][numberState(states, "weirdo_direction") & 3]!;
+  return numberState(states, "direction") & 3;
+}
+
+function rotate(bounds: ModelBounds, turns: number): ModelBounds {
+  let [x0, y0, z0, x1, y1, z1] = bounds;
+  for (let turn = 0; turn < turns; turn++) [x0, z0, x1, z1] = [16 - z1, x0, 16 - z0, x1];
+  return [x0, y0, z0, x1, y1, z1];
+}
+
+function oriented(parts: readonly ModelPart[], facing: number): readonly ModelPart[] {
+  return facing === 0 ? parts : parts.map((p) => ({ ...p, bounds: rotate(p.bounds, facing) }));
+}
+
+function connected(model: BlockModel, neighbors: ModelNeighbors, index: number): boolean {
+  const explicit = model.states[`minecraft:connection_${CONNECTIONS[index]}`];
+  if (explicit !== undefined) return isSet(explicit);
+  const [dx, dz] = DIRECTIONS[index]!;
+  const neighbor = neighbors(dx, 0, dz);
+  if (neighbor.opaque) return true;
+  const family = neighbor.model?.family;
+  if (model.family === "pane") return family === "pane" || neighbor.glass === true;
+  if (family === "gate") {
+    const acrossX = (modelFacing(neighbor.model!.states) & 1) === 0;
+    return index < 2 ? acrossX : !acrossX;
+  }
+  if (model.family === "wall") return family === "wall";
+  return (
+    family === "fence" &&
+    model.block.includes("nether_brick") === neighbor.model!.block.includes("nether_brick")
+  );
+}
+
+/** Produces small, shared cuboid models; only connections depend on neighboring blocks. */
+export function blockModelParts(
+  model: BlockModel,
+  neighbors: ModelNeighbors = EMPTY_NEIGHBORS,
+): readonly ModelPart[] {
+  const { states: s, family } = model;
+  const facing = modelFacing(s, family === "stairs");
+  switch (family) {
+    case "stairs":
+      return stairParts(model, neighbors);
+    case "door": {
+      const upper = isSet(s.upper_block_bit);
+      const lowerModel = upper ? neighbors(0, -1, 0).model : model;
+      const upperModel = upper ? model : neighbors(0, 1, 0).model;
+      const lower = lowerModel?.family === "door" ? lowerModel.states : s;
+      const hinge =
+        upperModel?.family === "door" ? upperModel.states.door_hinge_bit : s.door_hinge_bit;
+      const turns = (modelFacing(lower) + (isSet(lower.open_bit) ? (isSet(hinge) ? 1 : 3) : 0)) & 3;
+      return oriented([part([0, 0, 0, 16, 16, 3])], turns);
+    }
+    case "trapdoor":
+      return isSet(s.open_bit)
+        ? oriented([part([0, 0, 13, 16, 16, 16])], facing)
+        : [part(isSet(s.upside_down_bit) ? [0, 13, 0, 16, 16, 16] : [0, 0, 0, 16, 3, 16])];
+    case "fence": {
+      const parts: ModelPart[] = [part([6, 0, 6, 10, 16, 10])];
+      for (let index = 0; index < 4; index++)
+        if (connected(model, neighbors, index)) {
+          for (const low of [6, 12]) {
+            const bounds: ModelBounds = [7, low, 8, 9, low + 3, 16];
+            parts.push(part(rotate(bounds, [3, 1, 0, 2][index]!)));
+          }
+        }
+      return parts;
+    }
+    case "gate": {
+      const parts: ModelPart[] = [part([0, 5, 7, 2, 16, 9]), part([14, 5, 7, 16, 16, 9])];
+      if (isSet(s.open_bit)) {
+        parts.push(
+          part([0, 6, 9, 2, 9, 16]),
+          part([14, 6, 9, 16, 9, 16]),
+          part([0, 12, 9, 2, 15, 16]),
+          part([14, 12, 9, 16, 15, 16]),
+        );
+      } else {
+        parts.push(
+          part([2, 6, 7, 14, 9, 9]),
+          part([2, 12, 7, 14, 15, 9]),
+          part([6, 9, 7, 10, 12, 9]),
+        );
+      }
+      return oriented(parts, facing);
+    }
+    case "wall": {
+      const parts: ModelPart[] = [];
+      const links = CONNECTIONS.map((side, index) => {
+        const value = s[`wall_connection_type_${side}`];
+        return value === "none"
+          ? 0
+          : value === "tall"
+            ? 16
+            : value === "short"
+              ? 14
+              : connected(model, neighbors, index)
+                ? 14
+                : 0;
+      });
+      const straight =
+        (links[0]! > 0 && links[1]! > 0 && !links[2] && !links[3]) ||
+        (links[2]! > 0 && links[3]! > 0 && !links[0] && !links[1]);
+      if (s.wall_post_bit === undefined ? !straight : isSet(s.wall_post_bit))
+        parts.push(part([4, 0, 4, 12, 16, 12]));
+      for (let index = 0; index < 4; index++)
+        if (links[index]) {
+          parts.push(part(rotate([5, 0, 8, 11, links[index]!, 16], [3, 1, 0, 2][index]!)));
+        }
+      return parts;
+    }
+    case "pane": {
+      const parts: ModelPart[] = [part([7, 0, 7, 9, 16, 9])];
+      for (let index = 0; index < 4; index++)
+        if (connected(model, neighbors, index)) {
+          parts.push(part(rotate([7, 0, 8, 9, 16, 16], [3, 1, 0, 2][index]!)));
+        }
+      return parts;
+    }
+    case "scaffolding": {
+      const parts: ModelPart[] = [];
+      for (const x of [0, 14])
+        for (const z of [0, 14]) parts.push(part([x, 0, z, x + 2, 16, z + 2]));
+      parts.push(
+        part([0, 14, 0, 16, 16, 2]),
+        part([0, 14, 14, 16, 16, 16]),
+        part([0, 14, 2, 2, 16, 14]),
+        part([14, 14, 2, 16, 16, 14]),
+      );
+      for (const x of [4, 8, 12]) parts.push(part([x, 14, 2, x + 1, 16, 14]));
+      if (neighbors(0, -1, 0).model?.family !== "scaffolding" && numberState(s, "stability") > 0) {
+        parts.push(part([0, 0, 0, 16, 2, 2]), part([0, 0, 14, 16, 2, 16]));
+      }
+      return parts;
+    }
+    case "bed": {
+      const head = isSet(s.head_piece_bit);
+      if (model.block === "straw_bed") {
+        // Non-zero-volume cubes from the ZIP's straw_bed_{head,foot}.geo.json.
+        // Flat, rotated fringe polygons remain outside the cuboid renderer.
+        return oriented(
+          head
+            ? [part([0, 0, 0, 16, 4, 8]), part([0, 0, 8, 16, 5, 16])]
+            : [part([0, 0, 0, 16, 4, 16])],
+          facing,
+        );
+      }
+      const wood = 0xa2834f;
+      const parts = [part([0, 3, 0, 16, 6, 16], wood), part([0, 6, 0, 16, 9, 16])];
+      const z = head ? 13 : 0;
+      for (const x of [0, 13]) parts.push(part([x, 0, z, x + 3, 3, z + 3], wood));
+      if (head) {
+        // A texture-colored pillow on the existing mattress top, without increasing bed height.
+        parts[1] = part([0, 6, 0, 16, 9, 12]);
+        parts.push(part([0, 6, 12, 16, 9, 16], 0xe8e7e2));
+      }
+      return oriented(parts, facing);
+    }
+    case "chorus": {
+      const parts: ModelPart[] = [part([3, 3, 3, 13, 13, 13])];
+      const sides = [...CONNECTIONS, "up", "down"];
+      const offsets = [...DIRECTIONS.map(([x, z]) => [x, 0, z]), [0, 1, 0], [0, -1, 0]];
+      for (let index = 0; index < 6; index++) {
+        const explicit = s[`minecraft:connection_${sides[index]}`];
+        const [dx, dy, dz] = offsets[index]!;
+        const n = neighbors(dx!, dy!, dz!);
+        const link =
+          explicit === undefined
+            ? n.model?.family === "chorus" ||
+              n.model?.family === "chorus-flower" ||
+              (index === 5 && n.opaque)
+            : isSet(explicit);
+        if (!link) continue;
+        const bounds: ModelBounds =
+          index < 4
+            ? rotate([4, 4, 8, 12, 12, 16], [3, 1, 0, 2][index]!)
+            : index === 4
+              ? [4, 8, 4, 12, 16, 12]
+              : [4, 0, 4, 12, 8, 12];
+        parts.push(part(bounds));
+      }
+      return parts;
+    }
+    case "chorus-flower":
+      return [part([2, 2, 2, 14, 14, 14]), part([4, 0, 4, 12, 2, 12])];
+    case "lantern": {
+      const hanging = isSet(s.hanging);
+      return hanging
+        ? [part([5, 1, 5, 11, 8, 11]), part([6, 8, 6, 10, 10, 10]), part([7, 10, 7, 9, 16, 9])]
+        : [part([5, 0, 5, 11, 7, 11]), part([6, 7, 6, 10, 9, 10])];
+    }
+    case "pot":
+      return [
+        part([5, 0, 5, 11, 1, 11]),
+        part([5, 1, 5, 6, 6, 11]),
+        part([10, 1, 5, 11, 6, 11]),
+        part([6, 1, 5, 10, 6, 6]),
+        part([6, 1, 10, 10, 6, 11]),
+      ];
+    case "rod":
+    case "chain": {
+      const axis =
+        family === "chain"
+          ? s.pillar_axis
+          : ["y", "y", "z", "z", "x", "x"][numberState(s, "facing_direction", 1)];
+      return [
+        part(
+          axis === "x"
+            ? [0, 7, 7, 16, 9, 9]
+            : axis === "z"
+              ? [7, 7, 0, 9, 9, 16]
+              : [7, 0, 7, 9, 16, 9],
+        ),
+      ];
+    }
+    case "ladder": {
+      const parts: ModelPart[] = [part([2, 0, 0, 4, 16, 2]), part([12, 0, 0, 14, 16, 2])];
+      for (const y of [1, 4, 7, 10, 13]) parts.push(part([4, y, 0, 12, y + 1, 2]));
+      return oriented(parts, [0, 0, 0, 2, 3, 1][numberState(s, "facing_direction", 2)]!);
+    }
+    case "candle": {
+      const count = Math.min(4, Math.max(1, numberState(s, "candles") + 1));
+      const positions =
+        count === 1
+          ? [[7, 7]]
+          : [
+              [5, 5],
+              [9, 8],
+              [5, 10],
+              [10, 4],
+            ];
+      return positions
+        .slice(0, count)
+        .map(([x, z], index) => part([x!, 0, z!, x! + 2, 4 + (index % 3) * 2, z! + 2]));
+    }
+    case "cake":
+      return [part([Math.min(13, 1 + numberState(s, "bite_counter") * 2), 0, 1, 15, 8, 15])];
+    case "cauldron":
+      return [
+        part([0, 0, 0, 16, 4, 16]),
+        part([0, 4, 0, 2, 16, 16]),
+        part([14, 4, 0, 16, 16, 16]),
+        part([2, 4, 0, 14, 16, 2]),
+        part([2, 4, 14, 14, 16, 16]),
+      ];
+    case "hopper":
+      return [
+        part([0, 10, 0, 2, 16, 16]),
+        part([14, 10, 0, 16, 16, 16]),
+        part([2, 10, 0, 14, 16, 2]),
+        part([2, 10, 14, 14, 16, 16]),
+        part([4, 4, 4, 12, 10, 12]),
+        part([6, 0, 6, 10, 4, 10]),
+      ];
+  }
+}
+
+function stairParts(model: BlockModel, neighbors: ModelNeighbors): readonly ModelPart[] {
+  const { states: s } = model;
+  const upside = isSet(s.upside_down_bit);
+  const low = upside ? 0 : 8;
+  let corner = s["minecraft:corner"];
+  const facing = modelFacing(s, true);
+  // Older palettes omit the derived corner state. Reconstruct it from same-half stairs.
+  if (corner === undefined) {
+    const [dx, dz] = [
+      [0, 1],
+      [-1, 0],
+      [0, -1],
+      [1, 0],
+    ][facing]!;
+    const inFront = neighbors(dx!, 0, dz!).model;
+    const behind = neighbors(-dx!, 0, -dz!).model;
+    for (const [neighbor, outer] of [
+      [inFront, true],
+      [behind, false],
+    ] as const) {
+      if (neighbor?.family !== "stairs" || isSet(neighbor.states.upside_down_bit) !== upside)
+        continue;
+      const turn = (modelFacing(neighbor.states, true) - facing + 4) & 3;
+      if (turn !== 1 && turn !== 3) continue;
+      const [nx, nz] = [
+        [0, 1],
+        [-1, 0],
+        [0, -1],
+        [1, 0],
+      ][modelFacing(neighbor.states, true)]!;
+      const beside = neighbors(nx! * (outer ? -1 : 1), 0, nz! * (outer ? -1 : 1)).model;
+      if (
+        beside?.family === "stairs" &&
+        modelFacing(beside.states, true) === facing &&
+        isSet(beside.states.upside_down_bit) === upside
+      )
+        continue;
+      corner = `${outer ? "outer" : "inner"}_${turn === 1 ? "right" : "left"}`;
+      break;
+    }
+  }
+  const parts: ModelPart[] = [part(upside ? [0, 8, 0, 16, 16, 16] : [0, 0, 0, 16, 8, 16])];
+  const left = corner === "outer_left" || corner === "inner_left";
+  if (corner === "outer_left" || corner === "outer_right")
+    parts.push(part([left ? 8 : 0, low, 8, left ? 16 : 8, low + 8, 16]));
+  else {
+    parts.push(part([0, low, 8, 16, low + 8, 16]));
+    if (corner === "inner_left" || corner === "inner_right")
+      parts.push(part([left ? 8 : 0, low, 0, left ? 16 : 8, low + 8, 8]));
+  }
+  return oriented(parts, facing);
+}
+
+/** Deterministic finite catalog used by the offline bounds-table generator and exhaustive tests. */
+export function modelCatalog(): readonly BlockModel[] {
+  const samples: BlockModel[] = [];
+  const add = (block: string, states: LittleEndianNbtCompoundValue = {}) => {
+    const model = resolveBlockModel(block, { ...states });
+    if (model !== undefined) samples.push(model);
+  };
+  for (let direction = 0; direction < 4; direction++) {
+    for (const upside_down_bit of [0, 1])
+      for (const corner of ["none", "inner_left", "inner_right", "outer_left", "outer_right"])
+        add("oak_stairs", {
+          weirdo_direction: direction,
+          upside_down_bit,
+          "minecraft:corner": corner,
+        });
+    for (const open_bit of [0, 1]) {
+      for (const door_hinge_bit of [0, 1])
+        add("wooden_door", { direction, open_bit, door_hinge_bit });
+      for (const upside_down_bit of [0, 1])
+        add("trapdoor", { direction, open_bit, upside_down_bit });
+      add("oak_fence_gate", { direction, open_bit });
+    }
+    for (const head_piece_bit of [0, 1]) {
+      add("bed", { direction, head_piece_bit });
+      add("straw_bed", { direction, head_piece_bit });
+    }
+  }
+  for (const block of ["oak_fence", "cobblestone_wall", "glass_pane", "chorus_plant"]) {
+    const s: Record<string, string | number> = {};
+    for (const side of [...CONNECTIONS, "up", "down"]) s[`minecraft:connection_${side}`] = 1;
+    for (const side of CONNECTIONS) s[`wall_connection_type_${side}`] = "tall";
+    add(block, s);
+    if (block.endsWith("wall")) {
+      for (const side of CONNECTIONS) s[`wall_connection_type_${side}`] = "short";
+      add(block, { ...s });
+    }
+  }
+  for (const block of ["scaffolding", "chorus_flower", "flower_pot", "cauldron", "hopper"])
+    add(block, { stability: 1 });
+  for (const hanging of [0, 1]) add("lantern", { hanging });
+  for (let facing_direction = 0; facing_direction < 6; facing_direction++) {
+    add("end_rod", { facing_direction });
+    if (facing_direction >= 2) add("ladder", { facing_direction });
+  }
+  for (const pillar_axis of ["x", "y", "z"]) add("chain", { pillar_axis });
+  for (let candles = 0; candles < 4; candles++) add("candle", { candles });
+  for (let bite_counter = 0; bite_counter < 7; bite_counter++) add("cake", { bite_counter });
+  return samples;
+}

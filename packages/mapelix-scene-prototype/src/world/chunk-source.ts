@@ -13,6 +13,7 @@ import {
 import type { LiveRecord, WorldDatabase } from "../leveldb/world-database.js";
 import { DIMENSIONS, parseDimension, type Dimension, type DimensionConfig } from "../dimensions.js";
 import { Data3DBiomes } from "./data-3d-biomes.js";
+import { isBlockEntityKey, readBedColors, type BedColors } from "./bed-colors.js";
 
 export type { Dimension } from "../dimensions.js";
 
@@ -23,6 +24,7 @@ export interface ChunkRecords {
   /** Subchunk records sorted from the top of the world down. */
   readonly sections: readonly SectionRecord[];
   readonly biomes: ChunkBiomes;
+  readonly bedColors: BedColors;
 }
 
 export interface SectionRecord {
@@ -36,6 +38,7 @@ export interface DecodedChunk {
   readonly z: number;
   readonly sections: readonly DecodedSubchunk[];
   readonly biomes: ChunkBiomes;
+  readonly bedColors: BedColors;
 }
 
 /**
@@ -83,7 +86,12 @@ export class ChunkSource {
     const sections: SectionRecord[] = [];
     let data3D: Data3DBiomes | undefined;
     let data2D: DecodedData2D | undefined;
+    let blockEntities: Uint8Array | undefined;
     for (const record of this.database.readPrefix(this.prefix(chunkX, chunkZ))) {
+      if (isBlockEntityKey(record.key, this.dimension)) {
+        blockEntities = record.value;
+        continue;
+      }
       const key = classifyMapRecordKey(record.key);
       if (key === undefined || key.dimension !== this.dimension) continue;
       if (key.tag === SUBCHUNK_TAG) {
@@ -97,7 +105,13 @@ export class ChunkSource {
     if (sections.length === 0) return undefined;
 
     sections.sort((left, right) => right.y - left.y);
-    return { x: chunkX, z: chunkZ, sections, biomes: new ChunkBiomes(data3D, data2D) };
+    return {
+      x: chunkX,
+      z: chunkZ,
+      sections,
+      biomes: new ChunkBiomes(data3D, data2D),
+      bedColors: readBedColors(blockEntities, chunkX, chunkZ, this.config.minY, this.config.maxY),
+    };
   }
 
   /** Decodes every subchunk of a chunk, including palette states for block shapes. */
@@ -118,6 +132,7 @@ export class ChunkSource {
             x: chunkX,
             z: chunkZ,
             biomes: records.biomes,
+            bedColors: records.bedColors,
             sections: records.sections
               .map((section) => decodeSection(section))
               .filter(

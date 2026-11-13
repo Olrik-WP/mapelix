@@ -56,6 +56,7 @@ export class ChunkVoxelReader {
   private readonly layerColor = new Int32Array(256);
   /** Per column while writing: 1 when the block above is water. */
   private readonly waterAbove = new Uint8Array(256);
+  private readonly lavaAbove = new Uint8Array(256);
 
   constructor(chunks: ChunkSource, palette: BlockPalette) {
     this.chunks = chunks;
@@ -87,7 +88,7 @@ export class ChunkVoxelReader {
       ) {
         continue;
       }
-      const cells = sectionCells(section, this.palette);
+      const cells = sectionCells(section, this.palette, records.bedColors.get(section.y));
       const top = this.highestFilled(cells);
       if (top === -1) continue;
       sections.push({ y: section.y, cells, top });
@@ -167,19 +168,21 @@ export class ChunkVoxelReader {
   ): void {
     const { voxel, covered } = this.palette;
     const { kind: kinds, top: tops, side: sides, fill, covered: soils } = box;
-    const { layerColor, waterAbove } = this;
+    const { layerColor, waterAbove, lavaAbove } = this;
     let previous = Number.POSITIVE_INFINITY;
     for (const section of sections) {
       // A missing subchunk is air, which ends any layer or water above it.
       if (section.y !== previous - 1) {
         layerColor.fill(-1);
         waterAbove.fill(0);
+        lavaAbove.fill(0);
       }
       previous = section.y;
       const { cells } = section;
       if (section.top < 15) {
         layerColor.fill(-1);
         waterAbove.fill(0);
+        lavaAbove.fill(0);
       }
       for (let y = section.top; y >= 0; y -= 1) {
         let index = (section.y * 16 + y - low) * 256;
@@ -195,6 +198,7 @@ export class ChunkVoxelReader {
           if (kind === VoxelKind.Layer) {
             layerColor[column] = this.faceColor(id, Face.PositiveY, tints[column]!);
             waterAbove[column] = 0;
+            lavaAbove[column] = 0;
             continue;
           }
           if (kind === VoxelKind.Water) {
@@ -211,11 +215,13 @@ export class ChunkVoxelReader {
             // Covered sides keep the color of their strip; the shader draws the soil below it.
             sides[index] = soil === 1 ? top : this.faceColor(id, Face.PositiveX, tints[column]!);
             soils[index] = soil;
-            fill[index] = 16;
+            fill[index] =
+              kind === VoxelKind.Lava && lavaAbove[column] === 0 ? this.palette.boxSize[id]! : 16;
           }
           kinds[index] = kind;
           layerColor[column] = -1;
           waterAbove[column] = kind === VoxelKind.Water ? 1 : 0;
+          lavaAbove[column] = kind === VoxelKind.Lava ? 1 : 0;
         }
       }
     }

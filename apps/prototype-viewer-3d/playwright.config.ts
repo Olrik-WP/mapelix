@@ -1,6 +1,10 @@
 import { defineConfig } from "@playwright/test";
 import { resolve } from "node:path";
 
+const port = Number(process.env.MAPELIX_TEST_PORT ?? 5179);
+if (!Number.isInteger(port) || port < 1024 || port > 65535)
+  throw new RangeError("Invalid test port");
+
 export default defineConfig({
   projects: [{ name: "auto" }, { name: "webgl" }],
   testDir: "./tests",
@@ -9,14 +13,14 @@ export default defineConfig({
   workers: 1,
   timeout: 60_000,
   use: {
-    baseURL: "http://127.0.0.1:5179",
+    baseURL: `http://127.0.0.1:${port}`,
     channel: process.env.MAPELIX_TEST_BROWSER,
     viewport: { width: 1200, height: 800 },
     launchOptions: { args: ["--enable-unsafe-swiftshader"] },
   },
   webServer: {
-    command: "pnpm run dev --port 5179",
-    url: "http://127.0.0.1:5179",
+    command: `node node_modules/vite/bin/vite.js dev --host 127.0.0.1 --port ${port}`,
+    url: `http://127.0.0.1:${port}`,
     reuseExistingServer: false,
     env: {
       MAPELIX_WORLD_DIRECTORY:

@@ -59,12 +59,14 @@ describe("seekable world database", () => {
     }
   });
 
+  // LOD 0 includes the optional lava subtype/flow bits (15 lava quads in this fixture).
+  // The independent database scan and the color/model tests check the underlying behavior.
   it.each([
-    [0, "e9d18dc8ca9ff828c71aa06e8b1cb1894cb2b42a3000b3140439130b7b19ee0e"],
-    [1, "9b3b327688c41853c400e50977e3927c303d1e50bda4f6c544ff5d1b0113b0a5"],
-    [3, "ee426fbed3e125600ed1307bbb4753c65a3e8832a8e3dfac7aaf1e7f62a26dab"],
-    [5, "4e870ec433bd334ea2a88c9974c74b5951623ff7a656d97f9a51a32cd9f8dcab"],
-  ] as const)("preserves exact Overworld region bytes from main at LOD %i", (level, expected) => {
+    [0, "798dca699dcb7056f79843c0fe901cf1d558d9d5bd06170a50b6f4ec5a75ac6a"],
+    [1, "9561b7885f05d2a3fc65b1a8c4e7136e5aa573bd4746259a3d79214ccdbc044e"],
+    [3, "32e3f3b9a1617644c3b461289e4631a23145016e01aa357ce18e99b9b89093d7"],
+    [5, "bc6df017a53fa90c79f3cfd9e85cf3f25331d0693c702f43fd1acbcda61aae66"],
+  ] as const)("matches sampled-palette Overworld region bytes at LOD %i", (level, expected) => {
     const builder = new RegionBuilder({ directory, dimension: "overworld" });
     try {
       const bytes = builder.build({ level, x: 0, z: 0 });
