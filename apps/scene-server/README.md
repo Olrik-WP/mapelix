@@ -17,13 +17,14 @@ The server only reads it.
 
 ## Routes
 
-All routes accept `GET` and `HEAD` only. API version 2:
+All routes accept `GET` and `HEAD` only. API version 3:
 
-| Route                                                | Response                                                                |
-| ---------------------------------------------------- | ----------------------------------------------------------------------- |
-| `/v1/health`                                         | Status, revision, builds in flight, and cache use                       |
-| `/v1/world`                                          | Name, spawn, revision, and the profile of each served dimension         |
-| `/v1/dimensions/{dimension}/regions/{level}/{x}/{z}` | One binary scene region, as `@mapelix/scene-prototype/format` describes |
+| Route                                                | Response                                                                 |
+| ---------------------------------------------------- | ------------------------------------------------------------------------ |
+| `/v1/health`                                         | Status, revision, builds in flight, and cache use                        |
+| `/v1/world`                                          | Name, spawn, revisions, each served dimension, caves and discoveries     |
+| `/v1/dimensions/{dimension}/regions/{level}/{x}/{z}` | One binary scene region, as `@mapelix/scene-prototype/format` describes  |
+| `/v1/dimensions/{dimension}/discoveries/{x}/{z}`     | One discovery index, as `@mapelix/scene-prototype/discoveries` describes |
 
 `dimension` is `overworld`, `nether`, or `the-end`, and must be one of the served dimensions.
 `level` runs from 0 to 5. An optional `ceilingY` query parameter is the exclusive height at which
@@ -32,6 +33,18 @@ most its top. Without it, the dimension's `defaultCeilingY` applies (Overworld 3
 256). An optional `dimension` query parameter, as the viewer sends it, must repeat the path's. A
 refused context answers `400 invalid-context`. Each dimension and ceiling is a separate region in
 every cache.
+
+A cave slice adds `mode=caves`, `minY` and `maxY` (exclusive): 16 or 32 blocks, multiples of 16
+inside the dimension, at levels 0 and 1 only. An optional `ceilingY` must then equal `maxY`. `/v1/world`
+describes them under `caves` (`thicknesses`, `defaultThickness`, `maxLevel`). Cave slices have their
+own memory and disk caches, so browsing caves never evicts the surface.
+
+A discovery index lists the notable blocks of one 32-block column at every height (ores, spawners,
+containers, vaults, amethyst, sculk, portals and rails), whatever the view: one index serves every
+slice and filter. `x` and `z` count 32-block tiles. Its `revision` query parameter is the world's
+`snapshotRevision`, which is the region revision itself, so a new engine rebuilds the indexes too;
+an optional `schema` must be `1`. `/v1/world` advertises them under `discoveries` (`schemaVersion`,
+`tileSpan`). Tiles outside the stored area answer an empty index at once.
 
 Each `/v1/world` dimension entry gives `id`, `label`, `bounds` (stored blocks, or null when the
 dimension holds no chunks), `minY`, `maxY` (exclusive), `defaultCeilingY` and `spawn`, a navigation
@@ -57,17 +70,27 @@ empty region at once, without a build or a disk write. When too many builds wait
 | `MAPELIX_CACHE_MAX_MB`      | `1024`               | Disk cache budget. The oldest regions go first beyond it.    |
 | `MAPELIX_BOUNDS`            | scanned              | `minX,minZ,maxX,maxZ` in blocks, replacing the scanned area. |
 
+Caves and discoveries have their own budgets: `MAPELIX_CAVES_MEMORY_CACHE_MB` (16),
+`MAPELIX_CAVES_CACHE_MAX_MB` (128), `MAPELIX_CAVES_MAX_PENDING` (8), `MAPELIX_DISCOVERY_MEMORY_CACHE_MB`
+(4), `MAPELIX_DISCOVERY_CACHE_MAX_MB` (64) and `MAPELIX_DISCOVERY_MAX_PENDING` (8). Their files live
+in `caves/` and `discoveries-v1/` under the cache directory, each with its own revision folder.
+
 ## Prewarm and the public listener
 
 `MAPELIX_PREWARM=1` builds every region of the stored area after start-up, one dimension after the
 other at its default ceiling, coarse levels first and nearest the middle of the world first, one region at a time so visitors wait behind at most one
 build. Regions already on disk are only read. It stops before the disk cache passes 85 % of its
 budget, and `MAPELIX_PREWARM_MAX_REGIONS` (default 100,000) caps the plan while keeping the coarse
-levels. `/v1/health` reports its progress under `prewarm`.
+levels. `/v1/health` reports its progress under `prewarm`. Then, unless
+`MAPELIX_PREWARM_DISCOVERIES=0`, it builds every discovery index of the stored area (a few kilobytes
+each), reported under `discoveries.prewarm`. Prewarm builds always wait behind visitors: a visitor's
+build takes the next free builder.
 
-`MAPELIX_PUBLIC_LISTEN` opens a second listener for an anonymous front end. It serves `/v1/world`
-and regions **from the cache only**: a region that is not built yet answers `404 not-cached`, so no
-visitor can make the server work. It does not offer `/v1/health`. `MAPELIX_PUBLIC_SOCKET_MODE`
+`MAPELIX_PUBLIC_LISTEN` opens a second listener for an anonymous front end. It serves `/v1/world`,
+regions and discoveries **from the cache only**: one that is not built yet answers `404 not-cached`,
+so no visitor can make the server work. With `MAPELIX_PUBLIC_BUILDS=1`, it may also build cave
+slices and discovery indexes, at most `MAPELIX_PUBLIC_MAX_BUILDS` (default 2) such requests at once
+(`503` beyond); surface regions stay cache-only. It does not offer `/v1/health`. `MAPELIX_PUBLIC_SOCKET_MODE`
 (default `660`) may give others read and write access when the socket's folder already restricts
 who can reach it; execute bits are refused.
 

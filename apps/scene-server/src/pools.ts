@@ -1,4 +1,5 @@
 import type { BuiltRegion, Dimension, RegionRequest, SceneWorld } from "@mapelix/scene-prototype";
+import type { DiscoveryRequest } from "@mapelix/scene-prototype/discoveries";
 
 export interface DimensionPoolsOptions {
   /** Opens one dimension's world and its builder threads. */
@@ -25,11 +26,13 @@ interface Pool {
  * shares one build budget between them and closes a dimension's threads once it has
  * been idle for a while, or a few seconds after another dimension opens, so memory
  * stays close to that of a single dimension. A dimension in use is never closed.
+ * Background work (the prewarm) gets a builder only when no visitor is waiting.
  */
 export class DimensionPools {
   private readonly options: DimensionPoolsOptions;
   private readonly pools = new Map<Dimension, Pool>();
   private readonly waiting: (() => void)[] = [];
+  private readonly waitingBackground: (() => void)[] = [];
   private running = 0;
   private closed = false;
 
@@ -49,18 +52,38 @@ export class DimensionPools {
     return [...this.pools.keys()];
   }
 
-  async build(
+  build(
     dimension: Dimension,
     request: RegionRequest,
     signal: AbortSignal,
+    background = false,
   ): Promise<BuiltRegion> {
-    await this.acquire(signal);
+    return this.run(dimension, signal, background, (world) => world.buildRegion(request, signal));
+  }
+
+  /** The all-height discovery index of one 32-block tile. */
+  discoveries(
+    dimension: Dimension,
+    tile: DiscoveryRequest,
+    signal: AbortSignal,
+    background = false,
+  ): Promise<BuiltRegion> {
+    return this.run(dimension, signal, background, (world) => world.buildDiscoveries(tile, signal));
+  }
+
+  private async run(
+    dimension: Dimension,
+    signal: AbortSignal,
+    background: boolean,
+    work: (world: SceneWorld) => Promise<BuiltRegion>,
+  ): Promise<BuiltRegion> {
+    await this.acquire(signal, background);
     const pool = this.pool(dimension);
     pool.active += 1;
     if (pool.idleTimer !== undefined) clearTimeout(pool.idleTimer);
     pool.idleTimer = undefined;
     try {
-      return await (await pool.world).buildRegion(request, signal);
+      return await work(await pool.world);
     } finally {
       pool.active -= 1;
       this.release();
@@ -110,9 +133,11 @@ export class DimensionPools {
     pool.idleTimer.unref?.();
   }
 
-  private acquire(signal: AbortSignal): Promise<void> {
+  private acquire(signal: AbortSignal, background: boolean): Promise<void> {
     if (signal.aborted) return Promise.reject(abortError());
-    if (this.running < this.options.permits) {
+    const queue = background ? this.waitingBackground : this.waiting;
+    const nobodyFirst = background ? this.waiting.length === 0 : true;
+    if (this.running < this.options.permits && nobodyFirst) {
       this.running += 1;
       return Promise.resolve();
     }
@@ -123,18 +148,18 @@ export class DimensionPools {
         resolve();
       };
       const onAbort = (): void => {
-        const index = this.waiting.indexOf(grant);
-        if (index >= 0) this.waiting.splice(index, 1);
+        const index = queue.indexOf(grant);
+        if (index >= 0) queue.splice(index, 1);
         reject(abortError());
       };
       signal.addEventListener("abort", onAbort, { once: true });
-      this.waiting.push(grant);
+      queue.push(grant);
     });
   }
 
   private release(): void {
     this.running -= 1;
-    this.waiting.shift()?.();
+    (this.waiting.shift() ?? this.waitingBackground.shift())?.();
   }
 }
 

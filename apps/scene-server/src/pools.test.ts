@@ -23,6 +23,13 @@ function fakeWorlds(): { open: (dimension: Dimension) => Promise<SceneWorld>; op
             finish: () => resolve({ bytes: new Uint8Array(4), milliseconds: 1 } as BuiltRegion),
           });
         }),
+      buildDiscoveries: (tile) =>
+        new Promise<BuiltRegion>((resolve) => {
+          entry.builds.push({
+            request: { level: -1, x: tile.x, z: tile.z },
+            finish: () => resolve({ bytes: new Uint8Array(4), milliseconds: 1 } as BuiltRegion),
+          });
+        }),
       close: async () => {
         entry.closed = true;
       },
@@ -50,6 +57,31 @@ describe("DimensionPools", () => {
     await second;
     await pools.close();
     expect(worlds.opened.every((entry) => entry.closed)).toBe(true);
+  });
+
+  it("lets a visitor go before waiting background work", async () => {
+    const worlds = fakeWorlds();
+    const pools = new DimensionPools({ open: worlds.open, permits: 1, idleMilliseconds: 0 });
+    const running = pools.build("overworld", { level: 0, x: 0, z: 0 }, signal(), true);
+    const prewarm = pools.build("overworld", { level: 0, x: 1, z: 0 }, signal(), true);
+    const visitor = pools.discoveries("overworld", { x: 5, z: 6 }, signal());
+    await flush();
+    const builds = worlds.opened[0]!.builds;
+    expect(builds.map((build) => build.request.x)).toEqual([0]);
+    builds[0]!.finish();
+    await running;
+    await flush();
+    expect(builds.map((build) => build.request)).toEqual([
+      { level: 0, x: 0, z: 0 },
+      { level: -1, x: 5, z: 6 },
+    ]);
+    builds[1]!.finish();
+    await visitor;
+    await flush();
+    expect(builds[2]!.request.x).toBe(1);
+    builds[2]!.finish();
+    await prewarm;
+    await pools.close();
   });
 
   it("drops a waiting build when its caller leaves", async () => {

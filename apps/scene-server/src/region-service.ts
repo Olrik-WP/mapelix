@@ -1,8 +1,10 @@
 import type { Dimension, RegionRequest } from "@mapelix/scene-prototype";
 import {
+  CAVE_LIMITS,
   regionCacheKey,
   sceneContext,
   type SceneContext,
+  type ViewMode,
 } from "@mapelix/scene-prototype/dimensions";
 import {
   EMPTY_HEIGHT,
@@ -13,8 +15,11 @@ import {
   regionSpan,
 } from "@mapelix/scene-prototype/format";
 
+import { ByteLru, Flights, isAbort } from "./build-cache.js";
 import { WORLD_LIMIT, type BlockBounds } from "./config.js";
 import { regionTouches } from "./extent.js";
+
+export { OverloadedError, isAbort } from "./build-cache.js";
 
 export type CacheStatus = "memory" | "disk" | "build" | "empty";
 
@@ -29,11 +34,15 @@ export interface BuiltBytes {
   readonly milliseconds: number;
 }
 
-/** The request handed to a build always carries its resolved ceiling. */
+/**
+ * The request handed to a build always carries its resolved ceiling; a cave request
+ * also carries its mode and floor. Background builds wait behind every visitor.
+ */
 export type BuildRegion = (
   dimension: Dimension,
   request: RegionRequest & { readonly ceilingY: number },
   signal: AbortSignal,
+  background?: boolean,
 ) => Promise<BuiltBytes>;
 
 export interface RegionStore {
@@ -43,6 +52,8 @@ export interface RegionStore {
 }
 
 export interface RegionServiceOptions {
+  /** The geometry this service builds and caches: surface views or cave slices. */
+  readonly mode?: ViewMode;
   /** Served dimensions and their stored area; undefined means the dimension stores nothing. */
   readonly dimensions: ReadonlyMap<Dimension, BlockBounds | undefined>;
   readonly build: BuildRegion;
@@ -62,11 +73,6 @@ export interface RegionServiceStats {
   readonly failed: number;
 }
 
-/** Too many distinct builds are already waiting. The client should retry later. */
-export class OverloadedError extends Error {
-  override readonly name = "OverloadedError";
-}
-
 /** A cache-only request asked for a region that has not been built yet. */
 export class NotCachedError extends Error {
   override readonly name = "NotCachedError";
@@ -75,17 +81,13 @@ export class NotCachedError extends Error {
 export interface LoadOptions {
   /** Answer only from memory or disk; never start or join a build. */
   readonly cacheOnly?: boolean;
+  /** A prewarm build: it waits for a free builder behind every visitor. */
+  readonly background?: boolean;
 }
 
 /** The request names a dimension, level, or position this server never serves. */
 export class InvalidRegionError extends Error {
   override readonly name = "InvalidRegionError";
-}
-
-interface InFlight {
-  readonly controller: AbortController;
-  readonly promise: Promise<RegionResult>;
-  waiters: number;
 }
 
 /**
@@ -96,25 +98,27 @@ interface InFlight {
  */
 export class RegionService {
   private readonly options: RegionServiceOptions;
-  private readonly memory = new Map<string, Uint8Array>();
-  private readonly inFlight = new Map<string, InFlight>();
-  private memoryBytes = 0;
+  private readonly mode: ViewMode;
+  private readonly memory: ByteLru;
+  private readonly flights: Flights<RegionResult>;
   private built = 0;
-  private rejected = 0;
   private failed = 0;
 
   constructor(options: RegionServiceOptions) {
     this.options = options;
+    this.mode = options.mode ?? "surface";
+    this.memory = new ByteLru(options.memoryBytes);
+    this.flights = new Flights(options.maxPending);
   }
 
   get stats(): RegionServiceStats {
     return {
-      inFlight: this.inFlight.size,
+      inFlight: this.flights.size,
       maxPending: this.options.maxPending,
       memoryEntries: this.memory.size,
-      memoryBytes: this.memoryBytes,
+      memoryBytes: this.memory.bytes,
       built: this.built,
-      rejected: this.rejected,
+      rejected: this.flights.rejected,
       failed: this.failed,
     };
   }
@@ -131,7 +135,13 @@ export class RegionService {
       throw new InvalidRegionError(`Dimension ${dimension} is not served`);
     }
     validateRegion(level, x, z);
-    const context = resolveContext(dimension, request.ceilingY);
+    const context = resolveContext(dimension, request);
+    if (context.mode !== this.mode) {
+      throw new InvalidRegionError(`This service builds ${this.mode} regions only`);
+    }
+    if (context.mode === "caves" && level > CAVE_LIMITS.maxLevel) {
+      throw new InvalidRegionError(`Caves use region levels 0 through ${CAVE_LIMITS.maxLevel}`);
+    }
     const bounds = this.options.dimensions.get(dimension);
     if (bounds === undefined || !regionTouches(bounds, regionSpan(level), x, z)) {
       return {
@@ -141,12 +151,10 @@ export class RegionService {
       };
     }
 
-    // Each ceiling cuts the geometry differently, so it is part of every cache key.
+    // Each vertical window cuts the geometry differently, so it is part of every key.
     const key = regionCacheKey(context, { level, x, z });
     const remembered = this.memory.get(key);
     if (remembered !== undefined) {
-      this.memory.delete(key);
-      this.memory.set(key, remembered);
       return {
         bytes: remembered,
         cacheStatus: "memory",
@@ -160,58 +168,25 @@ export class RegionService {
       return { bytes: stored, cacheStatus: "disk", milliseconds: performance.now() - startedAt };
     }
 
-    let flight = this.inFlight.get(key);
-    // A build every earlier caller abandoned is being dropped: start a fresh one.
-    if (flight?.controller.signal.aborted === true) flight = undefined;
-    if (flight === undefined) {
-      if (this.inFlight.size >= this.options.maxPending) {
-        this.rejected += 1;
-        throw new OverloadedError("Too many regions are being built; retry shortly");
-      }
-      const controller = new AbortController();
-      const promise = this.readOrBuild(
-        key,
-        dimension,
-        { level, x, z, ceilingY: context.ceilingY },
-        controller.signal,
-      );
-      flight = { controller, promise, waiters: 0 };
-      this.inFlight.set(key, flight);
-      const settled = flight;
-      void promise
-        .catch(() => undefined)
-        .finally(() => {
-          if (this.inFlight.get(key) === settled) this.inFlight.delete(key);
-        });
-    }
-    return this.wait(flight, signal);
-  }
-
-  /** Resolves with the shared build, or rejects for this caller alone when it aborts. */
-  private wait(flight: InFlight, signal: AbortSignal): Promise<RegionResult> {
-    if (signal.aborted) return Promise.reject(abortError());
-    flight.waiters += 1;
-    return new Promise((resolve, reject) => {
-      const onAbort = (): void => {
-        flight.waiters -= 1;
-        // Nobody wants it any more: drop the build if no worker has started it.
-        if (flight.waiters === 0) flight.controller.abort();
-        reject(abortError());
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      flight.promise.then(
-        (result) => {
-          signal.removeEventListener("abort", onAbort);
-          flight.waiters -= 1;
-          resolve(result);
-        },
-        (cause: unknown) => {
-          signal.removeEventListener("abort", onAbort);
-          flight.waiters -= 1;
-          reject(cause instanceof Error ? cause : new Error(String(cause)));
-        },
-      );
-    });
+    // Surface builds keep their historical request shape; caves name the whole window.
+    const build =
+      context.mode === "surface"
+        ? { level, x, z, ceilingY: context.ceilingY }
+        : {
+            level,
+            x,
+            z,
+            mode: context.mode,
+            minY: context.minY,
+            maxY: context.maxY,
+            ceilingY: context.ceilingY,
+          };
+    return this.flights.join(
+      key,
+      (flightSignal) =>
+        this.readOrBuild(key, dimension, build, flightSignal, options.background === true),
+      signal,
+    );
   }
 
   private async readOrBuild(
@@ -219,6 +194,7 @@ export class RegionService {
     dimension: Dimension,
     request: RegionRequest & { readonly ceilingY: number },
     signal: AbortSignal,
+    background: boolean,
   ): Promise<RegionResult> {
     const startedAt = performance.now();
     const store = this.options.store;
@@ -229,7 +205,7 @@ export class RegionService {
 
     let built: BuiltBytes;
     try {
-      built = await this.options.build(dimension, request, signal);
+      built = await this.options.build(dimension, request, signal, background);
     } catch (cause) {
       if (!isAbort(cause)) {
         this.failed += 1;
@@ -240,7 +216,7 @@ export class RegionService {
     this.built += 1;
     const bytes = aligned(built.bytes);
     await store?.write(key, bytes);
-    this.remember(key, bytes);
+    this.memory.set(key, bytes);
     return { bytes, cacheStatus: "build", milliseconds: built.milliseconds };
   }
 
@@ -251,34 +227,27 @@ export class RegionService {
     if (stored === undefined) return undefined;
     const bytes = aligned(stored);
     if (isValidRegion(bytes, request)) {
-      this.remember(key, bytes);
+      this.memory.set(key, bytes);
       return bytes;
     }
     this.options.onEvent?.("cache.discarded", { key });
     await store?.discard(key);
     return undefined;
   }
-
-  private remember(key: string, bytes: Uint8Array): void {
-    const budget = this.options.memoryBytes;
-    if (bytes.byteLength > budget) return;
-    const previous = this.memory.get(key);
-    if (previous !== undefined) this.memoryBytes -= previous.byteLength;
-    this.memory.delete(key);
-    this.memory.set(key, bytes);
-    this.memoryBytes += bytes.byteLength;
-    for (const [oldest, value] of this.memory) {
-      if (this.memoryBytes <= budget) break;
-      this.memory.delete(oldest);
-      this.memoryBytes -= value.byteLength;
-    }
-  }
 }
 
-/** The dimension's default ceiling, or a requested one the engine accepts. */
-export function resolveContext(dimension: Dimension, ceilingY: number | undefined): SceneContext {
+/** The dimension's default view, or the requested window the engine accepts. */
+export function resolveContext(
+  dimension: Dimension,
+  request: Pick<RegionRequest, "mode" | "minY" | "maxY" | "ceilingY"> = {},
+): SceneContext {
   try {
-    return sceneContext(dimension, ceilingY);
+    return sceneContext(dimension, {
+      ...(request.mode === undefined ? {} : { mode: request.mode }),
+      ...(request.minY === undefined ? {} : { minY: request.minY }),
+      ...(request.maxY === undefined ? {} : { maxY: request.maxY }),
+      ...(request.ceilingY === undefined ? {} : { ceilingY: request.ceilingY }),
+    });
   } catch (cause) {
     throw new InvalidRegionError(cause instanceof Error ? cause.message : String(cause));
   }
@@ -331,12 +300,4 @@ function aligned(bytes: Uint8Array): Uint8Array {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   return copy;
-}
-
-function abortError(): Error {
-  return new DOMException("The region request was cancelled", "AbortError");
-}
-
-export function isAbort(cause: unknown): boolean {
-  return cause instanceof Error && cause.name === "AbortError";
 }

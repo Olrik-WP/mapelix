@@ -18,7 +18,12 @@ export interface PrewarmProgress {
 }
 
 export interface PrewarmTarget {
-  load(dimension: Dimension, request: RegionRequest, signal: AbortSignal): Promise<RegionResult>;
+  load(
+    dimension: Dimension,
+    request: RegionRequest,
+    signal: AbortSignal,
+    options: { readonly background: true },
+  ): Promise<RegionResult>;
 }
 
 /**
@@ -101,7 +106,8 @@ export class Prewarmer {
       if (this.cacheNearlyFull()) return this.stop("cache-full");
       const { dimension, ...request } = this.jobs[index]!;
       try {
-        const result = await this.target.load(dimension, request, signal);
+        // Background: a visitor waiting for a builder always goes first.
+        const result = await this.target.load(dimension, request, signal, { background: true });
         this.current = {
           ...this.current,
           done: this.current.done + 1,

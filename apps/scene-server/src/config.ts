@@ -36,10 +36,29 @@ export interface ServerConfig {
   readonly prewarm: boolean;
   readonly prewarmMaxRegions: number;
   /**
-   * A second, cache-only listener for an anonymous front end: it never starts a
-   * build and serves only the world description and regions.
+   * A second listener for an anonymous front end: it serves the world description,
+   * regions and discoveries, and never starts a surface build.
    */
   readonly publicListen: ListenTarget | undefined;
+  /** Cave slices: their own memory and disk budgets, so they never evict the surface. */
+  readonly caves: CacheBudget;
+  /** Discovery indexes: one per 32-block column, independent of the view. */
+  readonly discoveries: CacheBudget;
+  /** Builds every discovery index after the surface prewarm (MAPELIX_PREWARM only). */
+  readonly prewarmDiscoveries: boolean;
+  /**
+   * Whether the public listener may build cave slices and discovery indexes that
+   * are not cached yet. Off, it answers them from the cache only.
+   */
+  readonly publicBuilds: boolean;
+  /** Cave and discovery requests the public listener lets wait on builds at once. */
+  readonly publicMaxBuilds: number;
+}
+
+export interface CacheBudget {
+  readonly memoryBytes: number;
+  readonly diskBytes: number;
+  readonly maxPending: number;
 }
 
 const MIB = 1024 * 1024;
@@ -80,7 +99,24 @@ export function readConfig(env: Environment): ServerConfig {
       env.MAPELIX_PUBLIC_LISTEN === undefined || env.MAPELIX_PUBLIC_LISTEN.trim() === ""
         ? undefined
         : parseListen(env.MAPELIX_PUBLIC_LISTEN, env.MAPELIX_PUBLIC_SOCKET_MODE, true),
+    caves: {
+      memoryBytes: integer(env, "MAPELIX_CAVES_MEMORY_CACHE_MB", 16, 0, 1024) * MIB,
+      diskBytes: integer(env, "MAPELIX_CAVES_CACHE_MAX_MB", 128, 16, 1024 * 1024) * MIB,
+      maxPending: integer(env, "MAPELIX_CAVES_MAX_PENDING", 8, 1, 256),
+    },
+    discoveries: {
+      memoryBytes: integer(env, "MAPELIX_DISCOVERY_MEMORY_CACHE_MB", 4, 0, 256) * MIB,
+      diskBytes: integer(env, "MAPELIX_DISCOVERY_CACHE_MAX_MB", 64, 16, 1024 * 1024) * MIB,
+      maxPending: integer(env, "MAPELIX_DISCOVERY_MAX_PENDING", 8, 1, 256),
+    },
+    prewarmDiscoveries: optionalFlag(env, "MAPELIX_PREWARM_DISCOVERIES", true),
+    publicBuilds: flag(env, "MAPELIX_PUBLIC_BUILDS"),
+    publicMaxBuilds: integer(env, "MAPELIX_PUBLIC_MAX_BUILDS", 2, 1, 64),
   };
+}
+
+function optionalFlag(env: Environment, name: string, fallback: boolean): boolean {
+  return (env[name] ?? "").trim() === "" ? fallback : flag(env, name);
 }
 
 function absolutePath(env: Environment, name: string): string {

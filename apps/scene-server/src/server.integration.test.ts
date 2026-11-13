@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { decodeDiscoveryTile } from "@mapelix/scene-prototype/discoveries";
 import { decodeSceneRegion } from "@mapelix/scene-prototype/format";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -110,7 +111,14 @@ describe("scene server process", () => {
     });
     try {
       const description = JSON.parse((await get(target, "/v1/world")).body.toString());
-      expect(description.apiVersion).toBe(2);
+      expect(description.apiVersion).toBe(3);
+      expect(description.snapshotRevision).toBe(description.revision);
+      expect(description.caves).toEqual({
+        thicknesses: [16, 32],
+        defaultThickness: 32,
+        maxLevel: 1,
+      });
+      expect(description.discoveries).toEqual({ schemaVersion: 1, tileSpan: 32 });
       expect(description.dimensions.map((entry: { id: string }) => entry.id)).toEqual([
         "overworld",
         "nether",
@@ -159,8 +167,56 @@ describe("scene server process", () => {
       expect((await get(target, "/v1/world", "DELETE")).status).toBe(405);
       expect((await get(target, "/v1/../../etc/passwd")).status).toBe(404);
 
+      // A cave slice is its own region, cached apart from the surface.
+      const slice = `/v1/dimensions/overworld/regions/0/${x}/${z}?dimension=overworld&mode=caves&minY=0&maxY=32&revision=${description.revision}`;
+      const cave = await get(target, slice);
+      expect(cave.status).toBe(200);
+      expect(cave.headers["x-mapelix-cache"]).toBe("build");
+      expect(decodeSceneRegion(new Uint8Array(cave.body))).toMatchObject({ level: 0, x, z });
+      expect((await get(target, slice)).headers["x-mapelix-cache"]).toBe("memory");
+      for (const query of [
+        "mode=caves&minY=0&maxY=48",
+        "mode=caves&minY=8&maxY=40",
+        "mode=caves&minY=-96&maxY=-64",
+        "mode=caves&minY=0&maxY=32&ceilingY=16",
+        "mode=tunnels",
+        "minY=0",
+      ]) {
+        const refused = await get(target, `/v1/dimensions/overworld/regions/0/${x}/${z}?${query}`);
+        expect(refused.status, query).toBe(400);
+      }
+      const coarse = `/v1/dimensions/overworld/regions/2/0/0?mode=caves&minY=0&maxY=32`;
+      expect((await get(target, coarse)).status).toBe(400);
+
+      // Discovery indexes: one per 32-block tile, keyed by the snapshot revision.
+      const tileX = Math.floor(bounds.minX / 32);
+      const tileZ = Math.floor(bounds.minZ / 32);
+      const tilePath = `/v1/dimensions/overworld/discoveries/${tileX}/${tileZ}?dimension=overworld&revision=${description.snapshotRevision}&schema=1`;
+      const tile = await get(target, tilePath);
+      expect(tile.status).toBe(200);
+      expect(tile.headers["x-mapelix-cache"]).toBe("build");
+      expect(tile.headers["cache-control"]).toContain("immutable");
+      expect(decodeDiscoveryTile(new Uint8Array(tile.body))).toMatchObject({
+        dimension: "overworld",
+        x: tileX,
+        z: tileZ,
+      });
+      expect((await get(target, tilePath)).headers["x-mapelix-cache"]).toBe("memory");
+      const farTile = await get(target, "/v1/dimensions/overworld/discoveries/900000/900000");
+      expect(farTile.headers["x-mapelix-cache"]).toBe("empty");
+      expect((await get(target, `${tilePath.replace("schema=1", "schema=2")}`)).status).toBe(400);
+      expect(
+        (await get(target, `/v1/dimensions/overworld/discoveries/0/0?revision=${"f".repeat(20)}`))
+          .status,
+      ).toBe(409);
+      expect((await get(target, "/v1/dimensions/overworld/discoveries/99999999/0")).status).toBe(
+        400,
+      );
+
       const health = JSON.parse((await get(target, "/v1/health")).body.toString());
       expect(health).toMatchObject({ status: "ok", builds: { built: 2 }, cache: { entries: 2 } });
+      expect(health.caves).toMatchObject({ builds: { built: 1 }, cache: { entries: 1 } });
+      expect(health.discoveries).toMatchObject({ builds: { built: 1 }, cache: { entries: 1 } });
       expect(health.openDimensions).toEqual(["overworld"]);
     } finally {
       server.child.kill("SIGTERM");
@@ -179,11 +235,19 @@ describe("scene server process", () => {
       expect(again.output()).not.toContain("world.extent-scanned");
       const health = JSON.parse((await get(target, "/v1/health")).body.toString());
       expect(health.cache.entries).toBe(2);
+      expect(health.caves.cache.entries).toBe(1);
+      expect(health.discoveries.cache.entries).toBe(1);
     } finally {
       again.child.kill("SIGTERM");
       await again.exited;
     }
-    expect((await readdir(cache)).length).toBe(1);
+    // One revision folder for the surface, and the caves and discoveries partitions.
+    const folders = await readdir(cache);
+    expect(folders.filter((name) => /^[0-9a-f]{20}$/.test(name))).toHaveLength(1);
+    expect(folders.filter((name) => !/^[0-9a-f]{20}$/.test(name)).sort()).toEqual([
+      "caves",
+      "discoveries-v1",
+    ]);
   }, 60_000);
 
   it("serves anonymous front ends from the cache only, filled by the prewarm", async () => {
@@ -214,6 +278,11 @@ describe("scene server process", () => {
       const cached = await get(publicTarget, path);
       expect(cached.status).toBe(200);
       expect(decodeSceneRegion(new Uint8Array(cached.body)).level).toBe(2);
+      // Builds are off for the public socket by default: caves and discoveries too.
+      const slice = `/v1/dimensions/overworld/regions/0/${Math.floor(bounds.minX / 64)}/${Math.floor(bounds.minZ / 64)}?mode=caves&minY=0&maxY=32`;
+      expect((await get(publicTarget, slice)).status).toBe(404);
+      const tile = `/v1/dimensions/overworld/discoveries/${Math.floor(bounds.minX / 32)}/${Math.floor(bounds.minZ / 32)}`;
+      expect((await get(publicTarget, tile)).status).toBe(404);
       if ("socketPath" in publicTarget) {
         const { stat } = await import("node:fs/promises");
         expect((await stat(publicTarget.socketPath)).mode & 0o777).toBe(0o666);
@@ -223,11 +292,13 @@ describe("scene server process", () => {
       await cold.exited;
     }
 
-    // With a prewarm, every region of the stored area is ready for the public socket.
+    // With a prewarm, every region of the stored area is ready for the public socket,
+    // then every discovery index; public builds let it build cave slices too.
     const warm = await startServer({
       ...environment,
       MAPELIX_CACHE_DIRECTORY: join(work, "warm"),
       MAPELIX_PREWARM: "1",
+      MAPELIX_PUBLIC_BUILDS: "1",
     });
     try {
       const deadline = Date.now() + 40_000;
@@ -242,8 +313,28 @@ describe("scene server process", () => {
       }
       expect(prewarm.state).toBe("done");
       expect(prewarm.done).toBe(prewarm.total);
+      let discoveries = { state: "", done: 0, total: 1 };
+      while (discoveries.state !== "done" && Date.now() < deadline) {
+        const health = JSON.parse((await get(privateTarget, "/v1/health")).body.toString());
+        discoveries = health.discoveries.prewarm;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(discoveries.state).toBe("done");
+      expect(discoveries.total).toBeGreaterThan(0);
       const description = JSON.parse((await get(publicTarget, "/v1/world")).body.toString());
       const bounds = description.dimensions[0].bounds;
+      const tile = await get(
+        publicTarget,
+        `/v1/dimensions/overworld/discoveries/${Math.floor(bounds.maxX / 32)}/${Math.floor(bounds.maxZ / 32)}?revision=${description.snapshotRevision}`,
+      );
+      expect(tile.status).toBe(200);
+      const slice = `/v1/dimensions/overworld/regions/0/${Math.floor(bounds.maxX / 64)}/${Math.floor(bounds.maxZ / 64)}?mode=caves&minY=-32&maxY=0`;
+      const cave = await get(publicTarget, slice);
+      expect(cave.status).toBe(200);
+      expect(cave.headers["x-mapelix-cache"]).toBe("build");
+      // The surface stays cache-only even with public builds on.
+      const lower = `/v1/dimensions/overworld/regions/0/${Math.floor(bounds.maxX / 64)}/${Math.floor(bounds.maxZ / 64)}?ceilingY=64`;
+      expect((await get(publicTarget, lower)).status).toBe(404);
       for (let level = 0; level <= 5; level += 1) {
         const span = 64 << level;
         const path = `/v1/dimensions/overworld/regions/${level}/${Math.floor(bounds.maxX / span)}/${Math.floor(bounds.maxZ / span)}`;

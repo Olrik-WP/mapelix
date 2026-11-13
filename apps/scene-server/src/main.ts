@@ -1,8 +1,13 @@
-import { chmod, lstat, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, readFile, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { join } from "node:path";
 
 import { openSceneWorld, type Dimension } from "@mapelix/scene-prototype";
+import { CAVE_LIMITS } from "@mapelix/scene-prototype/dimensions";
+import {
+  DISCOVERY_SCHEMA_VERSION,
+  DISCOVERY_TILE_SPAN,
+} from "@mapelix/scene-prototype/discoveries";
 import { MAX_REGION_LEVEL, REGION_FORMAT_VERSION } from "@mapelix/scene-prototype/format";
 
 import {
@@ -12,13 +17,19 @@ import {
   type ListenTarget,
   type ServerConfig,
 } from "./config.js";
+import { DiscoveryService, discoveryTiles } from "./discovery-service.js";
 import { DiskCache } from "./disk-cache.js";
 import { parseExtent, scanWorldExtent, type WorldExtent } from "./extent.js";
-import { API_VERSION, createSceneServer, type WorldDescription } from "./http-server.js";
+import {
+  API_VERSION,
+  createSceneServer,
+  type RegionLoader,
+  type WorldDescription,
+} from "./http-server.js";
 import { log } from "./log.js";
 import { DimensionPools } from "./pools.js";
 import { describeDimension } from "./world-description.js";
-import { Prewarmer, prewarmPlan } from "./prewarm.js";
+import { Prewarmer, prewarmPlan, type PrewarmJob } from "./prewarm.js";
 import { RegionService } from "./region-service.js";
 import { engineFingerprint, worldRevision } from "./revision.js";
 
@@ -39,9 +50,30 @@ async function main(): Promise<void> {
     listen: config.listen.kind === "unix" ? "unix" : `${config.listen.host}:${config.listen.port}`,
   });
 
-  const disk = await DiskCache.open(config.cacheDirectory, revision, config.diskCacheBytes, {
-    onEvent: (event, detail) => log("info", event, detail),
-  });
+  const cacheEvents = {
+    onEvent: (event: string, detail: Record<string, unknown>) => log("info", event, detail),
+  };
+  const disk = await DiskCache.open(
+    config.cacheDirectory,
+    revision,
+    config.diskCacheBytes,
+    cacheEvents,
+  );
+  // Caves and discoveries keep their own folders and budgets: they never evict the surface.
+  const caveDisk = await DiskCache.open(
+    join(config.cacheDirectory, "caves"),
+    revision,
+    config.caves.diskBytes,
+    cacheEvents,
+  );
+  const discoveryFolder = `discoveries-v${DISCOVERY_SCHEMA_VERSION}`;
+  await removeOldDiscoveryFolders(config.cacheDirectory, discoveryFolder);
+  const discoveryDisk = await DiskCache.open(
+    join(config.cacheDirectory, discoveryFolder),
+    revision,
+    config.discoveries.diskBytes,
+    cacheEvents,
+  );
   const extent = await loadExtent(config, revision);
 
   const pools = new DimensionPools({
@@ -57,12 +89,38 @@ async function main(): Promise<void> {
   const bounds = new Map<Dimension, BlockBounds | undefined>(
     config.dimensions.map((dimension) => [dimension, config.bounds ?? extent[dimension]]),
   );
-  const regions = new RegionService({
+  const surface = new RegionService({
+    mode: "surface",
     dimensions: bounds,
-    build: (dimension, request, signal) => pools.build(dimension, request, signal),
+    build: (dimension, request, signal, background) =>
+      pools.build(dimension, request, signal, background),
     store: disk,
     memoryBytes: config.memoryCacheBytes,
     maxPending: config.maxPending,
+    onEvent: (event, detail) => log("warn", event, detail),
+  });
+  const caves = new RegionService({
+    mode: "caves",
+    dimensions: bounds,
+    build: (dimension, request, signal, background) =>
+      pools.build(dimension, request, signal, background),
+    store: caveDisk,
+    memoryBytes: config.caves.memoryBytes,
+    maxPending: config.caves.maxPending,
+    onEvent: (event, detail) => log("warn", event, detail),
+  });
+  const regions: RegionLoader = {
+    load: (dimension, request, signal, options) =>
+      (request.mode === "caves" ? caves : surface).load(dimension, request, signal, options),
+  };
+  const discoveries = new DiscoveryService({
+    dimensions: bounds,
+    build: (dimension, tile, signal, background) =>
+      pools.discoveries(dimension, tile, signal, background),
+    store: discoveryDisk,
+    memoryBytes: config.discoveries.memoryBytes,
+    memoryEntries: 256,
+    maxPending: config.discoveries.maxPending,
     onEvent: (event, detail) => log("warn", event, detail),
   });
 
@@ -71,38 +129,79 @@ async function main(): Promise<void> {
     name: first.info.name,
     spawn: first.info.spawn,
     revision,
+    snapshotRevision: revision,
     regionFormatVersion: REGION_FORMAT_VERSION,
     maxRegionLevel: MAX_REGION_LEVEL,
     dimensions: config.dimensions.map((id) =>
       describeDimension(id, bounds.get(id), first.info.spawn),
     ),
+    caves: {
+      thicknesses: [...CAVE_LIMITS.thicknesses],
+      defaultThickness: CAVE_LIMITS.defaultThickness,
+      maxLevel: CAVE_LIMITS.maxLevel,
+    },
+    discoveries: { schemaVersion: DISCOVERY_SCHEMA_VERSION, tileSpan: DISCOVERY_TILE_SPAN },
   };
   const prewarmer = new Prewarmer(
-    regions,
+    surface,
     config.prewarm ? prewarmPlan(bounds, config.prewarmMaxRegions) : [],
     () => disk.stats.bytes > disk.stats.maxBytes * 0.85,
     (event, detail) => log("info", event, detail),
+  );
+  // Every discovery index after the surface: a few kilobytes per tile, and it lets
+  // a cache-only front end show discoveries without building anything.
+  const discoveryJobs: PrewarmJob[] =
+    config.prewarm && config.prewarmDiscoveries
+      ? [...bounds].flatMap(([dimension, stored]) =>
+          stored === undefined
+            ? []
+            : discoveryTiles(stored).map((tile) => ({ dimension, level: 0, ...tile })),
+        )
+      : [];
+  const discoveryPrewarmer = new Prewarmer(
+    {
+      load: (dimension, request, signal, options) =>
+        discoveries.load(dimension, { x: request.x, z: request.z }, signal, options),
+    },
+    discoveryJobs,
+    () => discoveryDisk.stats.bytes > discoveryDisk.stats.maxBytes * 0.85,
+    (event, detail) => log("info", `discoveries.${event}`, detail),
   );
   const health = (): Record<string, unknown> => ({
     apiVersion: API_VERSION,
     revision,
     uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
     workers: config.workers,
-    builds: regions.stats,
+    builds: surface.stats,
     cache: disk.stats,
     prewarm: prewarmer.progress,
+    caves: { builds: caves.stats, cache: caveDisk.stats },
+    discoveries: {
+      builds: discoveries.stats,
+      cache: discoveryDisk.stats,
+      prewarm: discoveryPrewarmer.progress,
+    },
     dimensions: config.dimensions,
     openDimensions: pools.openDimensions,
   });
   const onEvent = (event: string, detail: Record<string, unknown>): void =>
     log("warn", event, detail);
-  const server = createSceneServer({ world, regions, health, onEvent });
+  const server = createSceneServer({ world, regions, discoveries, health, onEvent });
   await listen(server, config.listen);
-  // Anonymous front ends get their own socket, which can never start a build.
+  // Anonymous front ends get their own socket. It never builds a surface region, and
+  // builds cave slices and discoveries only when allowed, a few at a time.
   const publicServer =
     config.publicListen === undefined
       ? undefined
-      : createSceneServer({ world, regions, health, onEvent, cacheOnly: true });
+      : createSceneServer({
+          world,
+          regions,
+          discoveries,
+          health,
+          onEvent,
+          cacheOnly: true,
+          publicBuilds: config.publicBuilds ? config.publicMaxBuilds : 0,
+        });
   if (publicServer !== undefined && config.publicListen !== undefined) {
     await listen(publicServer, config.publicListen);
   }
@@ -111,10 +210,17 @@ async function main(): Promise<void> {
     name: world.name,
     dimensions: world.dimensions,
     publicListener: publicServer !== undefined,
+    publicBuilds: config.publicBuilds,
     prewarm: config.prewarm,
   });
   const stopPrewarm = new AbortController();
-  if (config.prewarm) void prewarmer.run(stopPrewarm.signal);
+  if (config.prewarm) {
+    void prewarmer
+      .run(stopPrewarm.signal)
+      .then(() =>
+        stopPrewarm.signal.aborted ? undefined : discoveryPrewarmer.run(stopPrewarm.signal),
+      );
+  }
 
   let stopping = false;
   const stop = (signal: string): void => {
@@ -132,6 +238,21 @@ async function main(): Promise<void> {
   };
   process.on("SIGTERM", () => stop("SIGTERM"));
   process.on("SIGINT", () => stop("SIGINT"));
+}
+
+/** Discovery folders of an older index schema can never be read again. */
+async function removeOldDiscoveryFolders(root: string, current: string): Promise<void> {
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (
+      entry.isDirectory() &&
+      /^discoveries-v\d{1,4}$/.test(entry.name) &&
+      entry.name !== current
+    ) {
+      await rm(join(root, entry.name), { recursive: true, force: true });
+      log("info", "cache.schema-removed", { folder: entry.name });
+    }
+  }
 }
 
 /** A missing or partial snapshot is a configuration error: restarting cannot fix it. */
