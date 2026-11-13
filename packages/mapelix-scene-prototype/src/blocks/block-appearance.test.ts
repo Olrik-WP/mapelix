@@ -62,15 +62,18 @@ describe("dimension block appearances", () => {
     const ground = resolveBlockAppearance("minecraft:warped_nylium", {});
     expect(ground.top).not.toBe(ground.side);
   });
-  it.each(["lava", "flowing_lava", "magma", "glowstone", "shroomlight"])(
-    "keeps %s emissive",
-    (name) => {
-      expect(resolveBlockAppearance(`minecraft:${name}`, {}).shape).toEqual({
-        kind: "cube",
-        material: QuadMaterial.Emissive,
-      });
-    },
-  );
+  it.each(["magma", "glowstone", "shroomlight"])("keeps %s emissive", (name) => {
+    expect(resolveBlockAppearance(`minecraft:${name}`, {}).shape).toEqual({
+      kind: "cube",
+      material: QuadMaterial.Emissive,
+    });
+  });
+  it.each(["lava", "flowing_lava"])("keeps %s distinct for its emissive fluid material", (name) => {
+    expect(resolveBlockAppearance(`minecraft:${name}`, {}).shape).toEqual({
+      kind: "lava",
+      level: 0,
+    });
+  });
   it("keeps End Stone distinct from purpur and gives unsupported blocks a stable solid fallback", () => {
     const stone = resolveBlockAppearance("minecraft:end_stone", {});
     expect(resolveBlockAppearance("minecraft:end_stone_bricks", {}).top).toBe(stone.top);

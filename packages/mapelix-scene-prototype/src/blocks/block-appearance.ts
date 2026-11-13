@@ -3,6 +3,7 @@ import type { LittleEndianNbtCompoundValue } from "@mapelix/prototype/bedrock";
 
 import { FULL_BOX, PlantSprite, QuadMaterial, type QuadBox } from "../format.js";
 import { BEDROCK_BLOCK_COLORS, type SampledBlockColors } from "./bedrock-colors.js";
+import { resolveBlockModel, type BlockModel } from "./block-models.js";
 
 /** How a block occupies its cell. Only cubes hide their neighbors and block the sky. */
 export type BlockShape =
@@ -11,7 +12,13 @@ export type BlockShape =
   | { readonly kind: "box"; readonly box: QuadBox; readonly material: SurfaceMaterial }
   | { readonly kind: "water" }
   | { readonly kind: "glass" }
-  | { readonly kind: "plant"; readonly sprite: PlantSprite };
+  | { readonly kind: "plant"; readonly sprite: PlantSprite }
+  | {
+      readonly kind: "model";
+      readonly model: BlockModel;
+      readonly material: SurfaceMaterial | typeof QuadMaterial.Glass;
+    }
+  | { readonly kind: "lava"; readonly level: number };
 
 export type SurfaceMaterial =
   | typeof QuadMaterial.Solid
@@ -93,7 +100,7 @@ const FLOWER_COLORS: ReadonlyArray<readonly [RegExp, number]> = [
 const FLOWER =
   /^(?:dandelion|yellow_flower|poppy|red_flower|blue_orchid|allium|azure_bluet|.*_tulip|oxeye_daisy|cornflower|lily_of_the_valley|wither_rose|torchflower|pitcher_plant|sunflower|lilac|rose_bush|peony|open_eyeblossom|closed_eyeblossom|cactus_flower)$/;
 
-/** Box shapes in sixteenths. Stairs and doors stay full cubes, which reads well from above. */
+/** Simple boxes in sixteenths. Multipart models are resolved before these fallbacks. */
 const BOXES: ReadonlyArray<readonly [RegExp, QuadBox, SurfaceMaterial]> = [
   [
     /(?:^|_)carpet$|^pink_petals$|^leaf_litter$|^(?:waterlily|lily_pad)$/,
@@ -324,6 +331,21 @@ const LEGACY_DOUBLE_PLANTS: Readonly<Record<string, string>> = {
 };
 
 function resolveShape(block: string, states: LittleEndianNbtCompoundValue): BlockShape {
+  const model = resolveBlockModel(block, states);
+  if (model !== undefined) {
+    const material = GLASS.test(block)
+      ? QuadMaterial.Glass
+      : model.family === "lantern" ||
+          model.family === "rod" ||
+          (model.family === "candle" && states.lit === 1)
+        ? QuadMaterial.Emissive
+        : QuadMaterial.Solid;
+    return { kind: "model", model, material };
+  }
+  if (block === "lava" || block === "flowing_lava") {
+    const level = typeof states.liquid_depth === "number" ? states.liquid_depth : 0;
+    return { kind: "lava", level: Math.max(0, Math.min(15, level)) };
+  }
   if (INVISIBLE.test(block)) return EMPTY;
   if (/^(?:water|flowing_water|bubble_column)$/.test(block)) return { kind: "water" };
   if (GLASS.test(block)) return { kind: "glass" };

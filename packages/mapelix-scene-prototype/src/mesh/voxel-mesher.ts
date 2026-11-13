@@ -3,6 +3,8 @@ import {
   EMPTY_HEIGHT,
   Face,
   FULLY_LIT,
+  QUAD_LAVA_FLAG,
+  QUAD_MODEL_FLAG,
   QuadList,
   QuadMaterial,
   WORLD_MAX_Y,
@@ -10,9 +12,14 @@ import {
   packQuadWord0,
   packQuadWord1,
   packQuadWord2,
+  packModelWord1,
+  modelBoxId,
+  partitionLavaQuads,
   type PlantSprite,
   type SceneRegion,
 } from "../format.js";
+import { blockModelParts, type ModelBounds } from "../blocks/block-models.js";
+import { lavaFlowDirection } from "./lava-flow.js";
 import { blendColumnTints } from "./biome-tints.js";
 import type { GeometryMode } from "../dimensions.js";
 import { BlockPalette, PALETTE_ID_MASK, Shape, TintCode, WATERLOGGED } from "./block-palette.js";
@@ -28,6 +35,7 @@ import {
 import {
   COVER_DEPTH,
   KEY_COVERED,
+  KEY_LAVA,
   NORMAL_LAYER,
   cornerOcclusion,
   faceOf,
@@ -83,6 +91,7 @@ class VoxelMesher {
   private high = NO_BLOCK;
   private minY = WORLD_MAX_Y;
   private maxY = WORLD_MIN_Y;
+  private hasModels = false;
 
   constructor(volume: RegionVolume, palette: BlockPalette, geometry: GeometryMode) {
     this.geometry = geometry;
@@ -103,6 +112,7 @@ class VoxelMesher {
     if (this.high >= this.low) {
       for (let face = 0; face < 6; face += 1) this.meshFace(face);
       this.meshPlants();
+      if (this.hasModels) this.meshModels();
     }
     return {
       level: 0,
@@ -111,7 +121,7 @@ class VoxelMesher {
       heights: this.heights(),
       minY: this.minY === WORLD_MAX_Y ? 0 : this.minY,
       maxY: this.minY === WORLD_MAX_Y ? 0 : this.maxY,
-      opaque: this.opaque.finish(),
+      opaque: partitionLavaQuads(this.opaque.finish()),
       plants: this.plants.finish(),
       translucent: this.translucent.finish(),
     };
@@ -211,6 +221,11 @@ class VoxelMesher {
     const cell = this.cells[index]!;
     const id = cell & PALETTE_ID_MASK;
     const shape = this.palette.shape[id]!;
+    if (shape === Shape.Model) {
+      this.hasModels = true;
+      return false;
+    }
+    if (shape === Shape.Lava) return this.writeLavaFace(face, index, y, column, keys, colors, mask);
     // Waterlogged plants and gaps render as water. Waterlogged stairs and slabs keep their shape.
     const passable = shape === Shape.Empty || shape === Shape.Plant;
     if (shape === Shape.Water || (passable && (cell & WATERLOGGED) !== 0)) {
@@ -277,6 +292,58 @@ class VoxelMesher {
     return true;
   }
 
+  private writeLavaFace(
+    face: number,
+    index: number,
+    y: number,
+    column: number,
+    keys: Uint32Array,
+    colors: Uint32Array,
+    mask: number,
+  ): boolean {
+    const id = this.cells[index]! & PALETTE_ID_MASK;
+    const above =
+      y + 1 < WORLD_MAX_Y &&
+      this.palette.shape[this.cells[index + VOLUME_LAYER]! & PALETTE_ID_MASK] === Shape.Lava;
+    const fill = above ? 16 : this.palette.boxSize[id]!;
+    const neighborY = y + NORMAL_LAYER[face]!;
+    if (neighborY < WORLD_MIN_Y) return false;
+    if (face === Face.PositiveY && fill < 16) {
+      if (!this.isOpen(index, y, column)) return false;
+    } else if (neighborY < WORLD_MAX_Y) {
+      const neighbor = index + STEPS.normal[face]!;
+      const neighborId = this.cells[neighbor]! & PALETTE_ID_MASK;
+      const neighborShape = this.palette.shape[neighborId]!;
+      if (neighborShape === Shape.Cube) return false;
+      if (
+        neighborShape === Shape.Lava &&
+        (isFlatFace(face) || this.lavaHeight(neighbor, fill) >= fill)
+      )
+        return false;
+      if (!this.isOpen(neighbor, neighborY, column + STEPS.column[face]!)) return false;
+    }
+    const flow = lavaFlowDirection(
+      this.lavaHeight(index + 1, fill),
+      this.lavaHeight(index - 1, fill),
+      this.lavaHeight(index + VOLUME_SIZE, fill),
+      this.lavaHeight(index - VOLUME_SIZE, fill),
+    );
+    keys[mask] =
+      (mergeKey(QuadMaterial.Emissive, fill, 0, false, face) | KEY_LAVA | (flow << 12)) >>> 0;
+    colors[mask] = packQuadWord2(this.colorOf(id, face, column), FULLY_LIT);
+    return true;
+  }
+
+  private lavaHeight(index: number, blockedFill: number): number {
+    const id = this.cells[index]! & PALETTE_ID_MASK;
+    if (this.palette.shape[id] === Shape.Cube) return blockedFill;
+    if (this.palette.shape[id] !== Shape.Lava) return 0;
+    return this.palette.shape[(this.cells[index + VOLUME_LAYER] ?? 0) & PALETTE_ID_MASK] ===
+      Shape.Lava
+      ? 16
+      : this.palette.boxSize[id]!;
+  }
+
   private emit(
     key: number,
     color: number,
@@ -293,7 +360,8 @@ class VoxelMesher {
     const translucent = material === QuadMaterial.Water || material === QuadMaterial.Glass;
     (translucent ? this.translucent : this.opaque).push(
       packQuadWord0(x, y, z, faceOf(face), material, (key & KEY_COVERED) !== 0),
-      packQuadWord1(width, height, box, 0),
+      packQuadWord1(width, height, box, 0) |
+        ((key & KEY_LAVA) !== 0 ? QUAD_LAVA_FLAG | (((key >>> 12) & 15) << 28) : 0),
       color,
     );
     this.minY = Math.min(this.minY, y);
@@ -329,6 +397,71 @@ class VoxelMesher {
     }
   }
 
+  /** Detailed models occupy the existing opaque/glass streams; all faces remain 12 bytes. */
+  private meshModels(): void {
+    const { palette } = this;
+    for (let z = 0; z < SPAN; z++)
+      for (let x = 0; x < SPAN; x++) {
+        const column = (z + VOLUME_MARGIN) * VOLUME_SIZE + x + VOLUME_MARGIN;
+        for (let y = this.columnLow[z * SPAN + x]!; y <= this.volume.topBlock[column]!; y++) {
+          const index = cellIndex(x + VOLUME_MARGIN, y, z + VOLUME_MARGIN);
+          const id = this.cells[index]! & PALETTE_ID_MASK;
+          const model = palette.models[id];
+          if (model === undefined || !this.isOpen(index, y, column)) continue;
+          const parts = blockModelParts(model, (dx, dy, dz) => {
+            if (y + dy < WORLD_MIN_Y || y + dy >= WORLD_MAX_Y) return { opaque: false };
+            const other =
+              this.cells[index + dx + dy * VOLUME_LAYER + dz * VOLUME_SIZE]! & PALETTE_ID_MASK;
+            return {
+              opaque: palette.shape[other] === Shape.Cube,
+              glass: palette.shape[other] === Shape.Glass,
+              model: palette.models[other],
+            };
+          });
+          const material = palette.material[id]! as QuadMaterial;
+          const list = material === QuadMaterial.Glass ? this.translucent : this.opaque;
+          for (const [partIndex, part] of parts.entries())
+            for (let face = 0; face < 6; face++) {
+              if (
+                parts.some(
+                  (other, otherIndex) =>
+                    otherIndex !== partIndex && coversModelFace(part.bounds, other.bounds, face),
+                )
+              )
+                continue;
+              const axis = face >> 1;
+              const plane = part.bounds[axis + ((face & 1) === 0 ? 3 : 0)]!;
+              const boundary = plane === ((face & 1) === 0 ? 16 : 0);
+              const neighborY = y + NORMAL_LAYER[face]!;
+              if (boundary && neighborY >= WORLD_MIN_Y && neighborY < WORLD_MAX_Y) {
+                const neighbor = index + STEPS.normal[face]!;
+                if (
+                  this.hides(this.cells[neighbor]!, face, id) ||
+                  !this.isOpen(neighbor, neighborY, column + STEPS.column[face]!)
+                )
+                  continue;
+              }
+              const color = part.color ?? this.colorOf(id, face, column);
+              const occlusion =
+                material === QuadMaterial.Emissive
+                  ? FULLY_LIT
+                  : this.occlusion(
+                      face,
+                      boundary ? index + STEPS.normal[face]! : index,
+                      boundary ? neighborY : y,
+                    );
+              list.push(
+                packQuadWord0(x, y, z, faceOf(face), material) | QUAD_MODEL_FLAG,
+                packModelWord1(modelBoxId(part.bounds)),
+                packQuadWord2(color, occlusion),
+              );
+              this.minY = Math.min(this.minY, y);
+              this.maxY = Math.max(this.maxY, y + 1);
+            }
+        }
+      }
+  }
+
   private heights(): Int16Array {
     const heights = new Int16Array(SPAN * SPAN);
     for (let z = 0; z < SPAN; z += 1) {
@@ -361,8 +494,16 @@ class VoxelMesher {
 
   /** A cell is open when the sky reaches it directly or through covered air. */
   private isOpen(index: number, y: number, column: number): boolean {
+    if (
+      this.geometry !== "surface" ||
+      y > this.volume.topSolid[column]! ||
+      this.reached[index] === 1
+    )
+      return true;
+    // A partial lava surface has open room above it, but remains opaque to sky tracing below.
     return (
-      this.geometry !== "surface" || y > this.volume.topSolid[column]! || this.reached[index] === 1
+      this.palette.shape[this.cells[index]! & PALETTE_ID_MASK] === Shape.Lava &&
+      (y + 1 > this.volume.topSolid[column]! || this.reached[index + VOLUME_LAYER] === 1)
     );
   }
 
@@ -371,7 +512,7 @@ class VoxelMesher {
   }
 
   private isOpaque(index: number): boolean {
-    return this.palette.shape[this.cells[index]! & PALETTE_ID_MASK] === Shape.Cube;
+    return this.palette.isOpaque(this.cells[index]! & PALETTE_ID_MASK);
   }
 
   private isWater(cell: number): boolean {
@@ -388,6 +529,22 @@ class VoxelMesher {
     const z = Math.floor(column / VOLUME_SIZE) - VOLUME_MARGIN;
     return this.tints[tint]![z * SPAN + x]!;
   }
+}
+
+/** Drops internal faces fully covered by another part, without creating new bounds variants. */
+function coversModelFace(a: ModelBounds, b: ModelBounds, face: number): boolean {
+  const axis = face >> 1;
+  const positive = (face & 1) === 0;
+  const plane = a[axis + (positive ? 3 : 0)]!;
+  if (
+    positive ? b[axis]! > plane || b[axis + 3]! <= plane : b[axis]! >= plane || b[axis + 3]! < plane
+  )
+    return false;
+  for (let tangent = 0; tangent < 3; tangent++) {
+    if (tangent !== axis && (b[tangent]! > a[tangent]! || b[tangent + 3]! < a[tangent + 3]!))
+      return false;
+  }
+  return true;
 }
 
 /** Faces on the cell boundary can be hidden by neighbors; inner box faces only by the sky. */

@@ -167,7 +167,7 @@ function scanColumn(
     if (topBlock[column] === NO_BLOCK && (shape !== Shape.Empty || cell & WATERLOGGED)) {
       topBlock[column] = y;
     }
-    if (shape === Shape.Cube) {
+    if (shape === Shape.Cube || shape === Shape.Lava) {
       topSolid[column] = y;
       return;
     }

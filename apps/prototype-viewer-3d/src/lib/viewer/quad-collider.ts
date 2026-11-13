@@ -1,6 +1,9 @@
 import {
   EMPTY_HEIGHT,
   WORLD_MIN_Y,
+  MODEL_BOUND_CODES,
+  QUAD_MODEL_FLAG,
+  quadModelIndex,
   type DecodedSceneRegion,
 } from "@mapelix/scene-prototype/format";
 import type { Vector3 } from "three/webgpu";
@@ -188,6 +191,14 @@ function readFace(words: Uint32Array, index: number, out: FaceBox): boolean {
   high[0] = x + 1 - inset;
   high[1] = y + bottom + size;
   high[2] = z + 1 - inset;
+  if ((word0 & QUAD_MODEL_FLAG) !== 0) {
+    const packed = MODEL_BOUND_CODES[quadModelIndex(word1)]!;
+    for (let axis = 0; axis < 3; axis++) {
+      const cell = axis === 0 ? x : axis === 1 ? y : z;
+      low[axis] = cell + ((packed >>> (axis * 5)) & 31) / 16;
+      high[axis] = cell + ((packed >>> ((axis + 3) * 5)) & 31) / 16;
+    }
+  }
 
   // The face lies on one side of its box, and stretches over `width` by `height` cells.
   const axis = code >> 1;

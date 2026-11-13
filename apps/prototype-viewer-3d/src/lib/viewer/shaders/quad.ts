@@ -1,5 +1,7 @@
+import { MODEL_BOUND_CODES } from "@mapelix/scene-prototype/format";
 import {
   Fn,
+  If,
   attribute,
   dot,
   float,
@@ -9,6 +11,7 @@ import {
   select,
   sRGBTransferEOTF,
   uint,
+  uniformArray,
   varyingProperty,
   vec2,
   vec3,
@@ -36,12 +39,17 @@ export const quadSprite = varyingProperty("float", "vQuadSprite");
 export const quadCovered = varyingProperty("float", "vQuadCovered");
 /** Quad size in blocks along its second tangent, which is height for side faces. */
 export const quadHeight = varyingProperty("float", "vQuadHeight");
+/** Horizontal lava flow direction (0 = convection, 1..8 = compass octants). */
+export const quadLavaFlow = varyingProperty("float", "vQuadLavaFlow");
 
 const bits = (word: Node<"uint">, shift: number, mask: number) =>
   float(word.shiftRight(uint(shift)).bitAnd(uint(mask)));
 
 /** Occlusion levels 0 through 3 mapped to light. Level 0 still keeps some bounce light. */
 const occlusionCurve = (level: Node<"float">) => mix(float(0.5), float(1), level.div(3).pow(0.8));
+
+// One scalar per cuboid, shared by all regions. No per-vertex/per-instance model buffers.
+const modelBounds = uniformArray<"uint">([...MODEL_BOUND_CODES], "uint");
 
 export const quadPosition = Fn(() => {
   const words = attribute("quad", "uvec3");
@@ -80,8 +88,16 @@ export const quadPosition = Fn(() => {
 
   // Box extents inside the cell. Slabs, carpets, and posts are boxes too.
   const bottom = anchoredTop.mul(float(1).sub(size));
-  const low = vec3(inset, bottom, inset);
-  const high = vec3(float(1).sub(inset), bottom.add(size), float(1).sub(inset));
+  const low = vec3(inset, bottom, inset).toVar();
+  const high = vec3(float(1).sub(inset), bottom.add(size), float(1).sub(inset)).toVar();
+  If(bits(word0, 31, 1).equal(1), () => {
+    const index = bits(word1, 27, 31)
+      .mul(6)
+      .add(bits(word1, 24, 7));
+    const packed = uint(modelBounds.element(uint(index)));
+    low.assign(vec3(bits(packed, 0, 31), bits(packed, 5, 31), bits(packed, 10, 31)).div(16));
+    high.assign(vec3(bits(packed, 15, 31), bits(packed, 20, 31), bits(packed, 25, 31)).div(16));
+  });
 
   const axis = face.div(2).floor();
   const normalAxis = select(
@@ -117,6 +133,7 @@ export const quadPosition = Fn(() => {
   quadSprite.assign(bits(word1, 24, 7));
   quadCovered.assign(bits(word0, 30, 1));
   quadHeight.assign(height);
+  quadLavaFlow.assign(bits(word1, 28, 15));
 
   return select(plant, crossPosition, boxPosition);
 });

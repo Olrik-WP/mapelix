@@ -101,11 +101,15 @@ JavaScript, so rebuilding produces separate revision/cache entries.
 
 ## Separate follow-up topics
 
-These work items start after the color commit, in another topic:
+The subsequent [block-model and lava lot](block-models-and-lava.md) adds cuboid
+models, lava patterns, animation, levels, directional flow and controlled emission
+through existing bloom. That document lists supported families and remaining
+model/fluid limitations. The color commits above remain independent of that lot.
 
-- Exact shapes/models: stairs, doors, fences, scaffolding, beds, chorus and small blocks.
-- Lava appearance: surface textures, animation, flow/levels, glow intensity, bloom
-  and possible local lighting. Static emissive rendering remains in this milestone.
+Still separate:
+
+- Full resource-pack/entity geometry, curved/rotated details, interpolated liquid
+  slopes and local light propagation.
 - Overworld underground exploration: the cave/gallery view, navigation below the
   surface, altitude controls and bounded visibility/volume budgets. The existing
   Nether ceiling cut remains; no underground visibility or slicing path is added.

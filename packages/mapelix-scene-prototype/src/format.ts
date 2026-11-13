@@ -8,9 +8,11 @@
  * region as one instanced quad and rebuild each corner in the vertex shader.
  *
  * Word 0: cell x (7) | cell z (7) << 7 | cell y + 64 (9) << 14 | face (3) << 23 |
- *         material (4) << 26 | covered soil (1) << 30
+ *         material (4) << 26 | covered soil (1) << 30 | optional model flag << 31
  * Word 1: width - 1 (7) | height - 1 (9) << 7 | box size - 1 (4) << 16 |
  *         box inset (3) << 20 | box anchored to top (1) << 23 | sprite (3) << 24
+ *         Non-plant extensions: model bounds ID in bits 24-31, or lava in bit 27
+ *         and its horizontal flow in bits 28-31. See docs/block-models-and-lava.md.
  * Word 2: sRGB color (24) | corner occlusion (4 × 2) << 24
  *
  * Width and height run along the face's two tangent axes. Boxes are measured in
@@ -18,6 +20,14 @@
  * A covered-soil side, such as a grass block's, is `SOIL_COLOR` with a thin strip of
  * the quad's color along its top edge.
  */
+
+import { modelBoxBounds, type ModelBounds } from "./model-boxes.js";
+export { MODEL_BOUND_CODES, modelBoxBounds, modelBoxId, type ModelBounds } from "./model-boxes.js";
+
+/** Optional model extension. Legacy readers ignore this formerly reserved bit. */
+export const QUAD_MODEL_FLAG = 0x8000_0000;
+/** Non-model emissive quads with this flag use the animated lava material. */
+export const QUAD_LAVA_FLAG = 1 << 27;
 
 export const REGION_MAGIC = 0x3153_584d; // "MXS1" in little-endian byte order.
 export const REGION_FORMAT_VERSION = 2;
@@ -90,6 +100,10 @@ export interface Quad {
   readonly height: number;
   readonly box: QuadBox;
   readonly sprite: PlantSprite;
+  /** Optional cuboid bounds; absent in all regions written before the model extension. */
+  readonly modelBounds?: ModelBounds;
+  readonly lava?: boolean;
+  readonly lavaFlow?: number;
   /** Packed `0xRRGGBB` sRGB color. */
   readonly color: number;
   /** Four two-bit occlusion levels, corner 0 in the low bits. 3 is fully lit. */
@@ -131,6 +145,41 @@ export function packQuadWord2(color: number, occlusion: number): number {
   return ((color & 0xffffff) | (occlusion << 24)) >>> 0;
 }
 
+/** Uses only extension bits and legal legacy sprite values, retaining a full-box fallback. */
+export function packModelWord1(id: number): number {
+  modelBoxBounds(id); // Validate before packing; the catalog has at most 192 entries.
+  const code = (Math.floor(id / 6) << 3) | (id % 6);
+  return (packQuadWord1(1, 1, FULL_BOX, 0) | (code << 24)) >>> 0;
+}
+
+export function quadModelIndex(word1: number): number {
+  const code = word1 >>> 24;
+  return (code >>> 3) * 6 + (code & 7);
+}
+
+export function isLavaQuad(word0: number, word1: number): boolean {
+  return (word0 & QUAD_MODEL_FLAG) === 0 && (word1 & QUAD_LAVA_FLAG) !== 0;
+}
+
+/** Groups lava at the end in place, so the viewer can draw two views without duplicating buffers. */
+export function partitionLavaQuads(words: Uint32Array): Uint32Array {
+  let first = 0;
+  let last = words.length / 3 - 1;
+  while (first <= last) {
+    if (!isLavaQuad(words[first * 3]!, words[first * 3 + 1]!)) {
+      first++;
+      continue;
+    }
+    for (let word = 0; word < 3; word++) {
+      const saved = words[first * 3 + word]!;
+      words[first * 3 + word] = words[last * 3 + word]!;
+      words[last * 3 + word] = saved;
+    }
+    last--;
+  }
+  return words;
+}
+
 /** Reads a packed quad back into named fields. The viewer decodes the same bits in TSL. */
 export function unpackQuad(words: Uint32Array, index: number): Quad {
   const word0 = words[index * 3]!;
@@ -151,6 +200,10 @@ export function unpackQuad(words: Uint32Array, index: number): Quad {
       anchoredTop: ((word1 >>> 23) & 1) === 1,
     },
     sprite: asSprite((word1 >>> 24) & 0x7),
+    ...((word0 & QUAD_MODEL_FLAG) !== 0
+      ? { modelBounds: modelBoxBounds(quadModelIndex(word1)) }
+      : {}),
+    ...(isLavaQuad(word0, word1) ? { lava: true, lavaFlow: word1 >>> 28 } : {}),
     color: word2 & 0xffffff,
     occlusion: word2 >>> 24,
   };

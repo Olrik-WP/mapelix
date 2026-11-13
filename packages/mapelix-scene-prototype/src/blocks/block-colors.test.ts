@@ -42,11 +42,11 @@ describe("sampled Bedrock block colors", () => {
     expect(resolveBlockAppearance("minecraft:waxed_copper", {}).top).toBe(fresh.top);
   });
 
-  it("keeps material and shape while distinguishing lava from magma", () => {
+  it("retains sampled colors while distinguishing lava fluid from solid magma", () => {
     const lava = resolveBlockAppearance("minecraft:lava", {});
     const magma = resolveBlockAppearance("minecraft:magma", {});
-    expect(lava.shape).toEqual({ kind: "cube", material: QuadMaterial.Emissive });
-    expect(magma.shape).toEqual(lava.shape);
+    expect(lava.shape).toEqual({ kind: "lava", level: 0 });
+    expect(magma.shape).toEqual({ kind: "cube", material: QuadMaterial.Emissive });
     expect(lava.top).toBe(0xd55b13);
     expect(magma.top).toBe(0x8f3f20);
     expect(lava.top).not.toBe(lava.side);

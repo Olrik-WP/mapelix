@@ -121,6 +121,8 @@ const KEY_STACKS = 1 << 29;
 const KEY_NARROW = 1 << 28;
 /** Set on keys of covered-soil sides. */
 export const KEY_COVERED = 1 << 27;
+/** Keeps lava from merging with other emissive faces, even when their colors match. */
+export const KEY_LAVA = 1 << 26;
 
 /**
  * Everything but position and size, so equal keys can merge into one quad. An inset

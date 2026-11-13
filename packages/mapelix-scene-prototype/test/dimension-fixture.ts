@@ -24,43 +24,74 @@ export function chunkKey(
   return key;
 }
 
-function paletteEntry(name: string): Uint8Array {
-  const encoded = new TextEncoder().encode(name);
-  const entry = new Uint8Array(13 + encoded.length);
-  entry.set([10, 0, 0, 8, 4, 0, 110, 97, 109, 101]);
-  new DataView(entry.buffer).setUint16(10, encoded.length, true);
-  entry.set(encoded, 12);
-  return entry;
+export type FixtureBlock =
+  | string
+  | {
+      readonly name: string;
+      readonly states: Readonly<Record<string, number | string>>;
+    };
+
+function paletteEntry(block: FixtureBlock): Uint8Array {
+  const string = (text: string): number[] => {
+    const bytes = new TextEncoder().encode(text);
+    return [bytes.length & 255, bytes.length >> 8, ...bytes];
+  };
+  const name = typeof block === "string" ? block : block.name;
+  const bytes = [10, 0, 0, 8, ...string("name"), ...string(name)];
+  if (typeof block !== "string") {
+    bytes.push(10, ...string("states"));
+    for (const [key, value] of Object.entries(block.states)) {
+      if (typeof value === "string") bytes.push(8, ...string(key), ...string(value));
+      else {
+        const encoded = new Uint8Array(4);
+        new DataView(encoded.buffer).setInt32(0, value, true);
+        bytes.push(3, ...string(key), ...encoded);
+      }
+    }
+    bytes.push(0);
+  }
+  bytes.push(0);
+  return Uint8Array.from(bytes);
 }
 
-/** A v9 disk subchunk with a four-bit palette and real little-endian block NBT. */
+/** A v9 disk subchunk with a four/eight-bit palette and real little-endian block NBT. */
 export function sectionRecord(
   dimension: number,
   x: number,
   z: number,
   y: number,
-  block: string | ((x: number, y: number, z: number) => string),
+  block: FixtureBlock | ((x: number, y: number, z: number) => FixtureBlock),
 ): FixtureRecord {
   const names: string[] = [];
-  const words = new Uint32Array(512);
+  const palette: FixtureBlock[] = [];
+  const indexes = new Uint16Array(4096);
   for (let index = 0; index < 4096; index++) {
     const name =
-      typeof block === "string"
-        ? block
-        : block(x * 16 + (index >> 8), y * 16 + (index & 15), z * 16 + ((index >> 4) & 15));
-    let id = names.indexOf(name);
+      typeof block === "function"
+        ? block(x * 16 + (index >> 8), y * 16 + (index & 15), z * 16 + ((index >> 4) & 15))
+        : block;
+    const key = typeof name === "string" ? name : JSON.stringify(name);
+    let id = names.indexOf(key);
     if (id < 0) {
       id = names.length;
-      names.push(name);
+      names.push(key);
+      palette.push(name);
     }
-    if (id > 15) throw new Error("Fixture palette exceeds four bits");
-    words[index >> 3] = words[index >> 3]! | (id << ((index & 7) * 4));
+    if (id > 255) throw new Error("Fixture palette exceeds eight bits");
+    indexes[index] = id;
   }
-  const entries = names.map(paletteEntry);
+  const bits = palette.length > 16 ? 8 : 4;
+  const perWord = 32 / bits;
+  const words = new Uint32Array(4096 / perWord);
+  for (let index = 0; index < indexes.length; index++) {
+    const word = Math.floor(index / perWord);
+    words[word] = words[word]! | (indexes[index]! << ((index % perWord) * bits));
+  }
+  const entries = palette.map(paletteEntry);
   const value = new Uint8Array(
     4 + words.byteLength + 4 + entries.reduce((size, entry) => size + entry.length, 0),
   );
-  value.set([9, 1, y & 255, 8]);
+  value.set([9, 1, y & 255, bits << 1]);
   const view = new DataView(value.buffer);
   for (let index = 0; index < words.length; index++)
     view.setUint32(4 + index * 4, words[index]!, true);
