@@ -100,6 +100,27 @@ Generated LevelDB records exercise models in all dimensions and lava at all
 six LODs. Browser tests compile WebGPU and forced WebGL shaders and compare a
 lava crop over time with an unchanged camera.
 
+### Lava coordinate correction
+
+The follow-up to `10a9a7c` fixes a shader-only defect: converting a negative
+floating-point noise seed directly to an unsigned integer collapsed the pattern
+in parts of the world. Lattice coordinates now pass through signed integers
+before their unsigned bits are mixed. Both axes contribute independently, so
+negative coordinates retain texture and animation without mirroring the world.
+The palette, glow, geometry, region format and cache keys are unchanged; only
+the viewer must be rebuilt and reloaded. No region cache purge or embed API
+version change is needed.
+
+A browser regression uses actual pixel contrast and frame differences in all
+four coordinate quadrants, across Overworld, Nether and End, with WebGPU and
+forced WebGL 2. The test reproduces the flat negative-X pool before the fix.
+It asserts the renderer backend as well as texture and animation, using only
+generated disposable worlds.
+
+Follow-up validation: viewer build, type checks, lint, 8 viewer unit tests and
+8 browser tests pass. Local automatic rendering used WebGPU; the second browser
+project forced WebGL 2. The regression checks 24 pool/backend combinations.
+
 The read-only user snapshot has Overworld/Nether without explored End chunks.
 End validation uses generated fixtures. All 14 source files are fingerprinted
 before and after validation. Targeted measurements compare against `855d98f`;
