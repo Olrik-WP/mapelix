@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { availableParallelism } from "node:os";
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
@@ -7,23 +6,24 @@ import { openSceneWorld, type RegionRequest, type SceneWorld } from "@mapelix/sc
 import { REGION_FORMAT_VERSION } from "@mapelix/scene-prototype/format";
 import {
   DIMENSIONS,
+  CAVE_LIMITS,
   regionCacheKey,
   sceneContext,
   type Dimension,
   type DimensionConfig,
   type SceneContext,
+  type SceneContextInput,
 } from "@mapelix/scene-prototype/dimensions";
 
 const worldDirectory =
   process.env.MAPELIX_WORLD_DIRECTORY ??
   resolve(process.cwd(), "../../.local/worlds/Amelix-8-12-26/Amelix SMP");
 const cacheDirectory = process.env.MAPELIX_CACHE_DIRECTORY ?? "/tmp/mapelix-scene-cache";
-const workers = positiveInteger(
-  process.env.MAPELIX_SCENE_WORKERS ?? String(Math.min(8, Math.max(2, availableParallelism() - 2))),
-);
+const workers = positiveInteger(process.env.MAPELIX_SCENE_WORKERS ?? "1");
 /** Bump when mesh output changes without a format change, so stale disk caches are ignored. */
 const meshRevision = 23;
 const maxMemoryRegions = 384;
+const caveMemoryBudget = positiveInteger(process.env.MAPELIX_CAVE_MEMORY_MIB ?? "16") * 1024 * 1024;
 
 export type CacheStatus = "memory" | "disk" | "build";
 
@@ -33,7 +33,7 @@ export interface LoadedRegion {
   readonly milliseconds: number;
 }
 
-export interface WorldMetadata {
+export interface WorldMetadata extends SceneContext {
   readonly dimension: Dimension;
   readonly ceilingY: number;
   readonly dimensions: readonly DimensionConfig[];
@@ -41,11 +41,17 @@ export interface WorldMetadata {
   readonly spawn: { readonly x: number; readonly y: number; readonly z: number };
   /** Changes whenever the world files or the mesh output change. */
   readonly revision: string;
+  readonly caves: typeof CAVE_LIMITS;
 }
 
 const worlds = new Map<Dimension, Promise<SceneWorld>>();
 let revisionPromise: Promise<string> | undefined;
 const memory = new Map<string, Promise<LoadedRegion>>();
+// Local caves are memory-only: exploring depths cannot create unbounded disk variants.
+// Production disk quotas and revision cleanup belong to the scene-server adapter.
+const caveMemory = new Map<string, LoadedRegion>();
+const cavePending = new Map<string, Promise<LoadedRegion>>();
+let caveBytes = 0;
 
 export function getSceneWorld(dimension: Dimension = "overworld"): Promise<SceneWorld> {
   let pending = worlds.get(dimension);
@@ -58,8 +64,9 @@ export function getSceneWorld(dimension: Dimension = "overworld"): Promise<Scene
 }
 
 export async function getWorldMetadata(
-  context: SceneContext = sceneContext(),
+  input: SceneContextInput = sceneContext(),
 ): Promise<WorldMetadata> {
+  const context = sceneContext(input.dimension, input);
   const [world, revision] = await Promise.all([getSceneWorld(context.dimension), getRevision()]);
   const spawn =
     context.dimension === "overworld"
@@ -69,10 +76,11 @@ export async function getWorldMetadata(
         : { x: 100, y: 64, z: 0 };
   return {
     name: world.info.name,
-    spawn,
+    spawn: context.mode === "caves" ? { ...spawn, y: (context.minY + context.maxY) / 2 } : spawn,
     revision,
     ...context,
     dimensions: Object.values(DIMENSIONS),
+    caves: CAVE_LIMITS,
   };
 }
 
@@ -83,9 +91,45 @@ export async function getWorldMetadata(
 export function loadRegion(
   request: RegionRequest,
   signal: AbortSignal,
-  context: SceneContext = sceneContext("overworld", request.ceilingY),
+  input: SceneContextInput = sceneContext("overworld", request),
 ): Promise<LoadedRegion> {
+  const context = sceneContext(input.dimension, input);
   const key = regionCacheKey(context, request);
+  if (context.mode === "caves") {
+    if (
+      !Number.isInteger(request.level) ||
+      request.level < 0 ||
+      request.level > CAVE_LIMITS.maxLevel
+    ) {
+      throw new RangeError(`Caves support LOD 0 through ${CAVE_LIMITS.maxLevel}`);
+    }
+    const cached = caveMemory.get(key);
+    if (cached !== undefined) {
+      caveMemory.delete(key);
+      caveMemory.set(key, cached);
+      return Promise.resolve({ ...cached, cacheStatus: "memory" });
+    }
+    const active = cavePending.get(key);
+    if (active !== undefined) return active;
+    const pending = getSceneWorld(context.dimension)
+      .then((world) => world.buildRegion({ ...request, ...context }, signal))
+      .then((built) => {
+        const region: LoadedRegion = { ...built, cacheStatus: "build" };
+        if (region.bytes.byteLength <= caveMemoryBudget) {
+          caveMemory.set(key, region);
+          caveBytes += region.bytes.byteLength;
+          while (caveBytes > caveMemoryBudget) {
+            const oldest = caveMemory.keys().next().value!;
+            caveBytes -= caveMemory.get(oldest)!.bytes.byteLength;
+            caveMemory.delete(oldest);
+          }
+        }
+        return region;
+      })
+      .finally(() => cavePending.delete(key));
+    cavePending.set(key, pending);
+    return pending;
+  }
   const cached = memory.get(key);
   if (cached !== undefined) {
     memory.delete(key);

@@ -164,14 +164,20 @@ class VoxelLevelMesher {
     for (let z = 0; z < span; z += 1) {
       for (let x = 0; x < span; x += 1) {
         const column = (z + margin) * width + x + margin;
-        const top = this.top[column]!;
+        const top = this.columnTop(column);
         let low = this.edgeFloor(column);
         for (const neighbor of [column, column + 1, column - 1, column + width, column - width]) {
           if (this.region.explored[neighbor] === 1) {
             low = Math.min(low, this.lowestOpen[neighbor]! - 1);
           }
         }
-        low = Math.max(0, low);
+        low = Math.max(
+          0,
+          low,
+          this.region.window === undefined
+            ? 0
+            : (this.region.window.minY - this.region.low) / this.region.voxelSize,
+        );
         columnLow[z * span + x] = low;
         if (top === -1) continue;
         this.low = Math.min(this.low, low);
@@ -193,7 +199,7 @@ class VoxelLevelMesher {
       for (let x = 0; x < span; x += 1) {
         const column = (z + margin) * width + x + margin;
         const border = isBorderFace(face, x, z, span);
-        const top = this.top[column]!;
+        const top = this.columnTop(column);
         for (let layer = this.columnLow[z * span + x]!; layer <= top; layer += 1) {
           const slice = maskSlice(face, x, layer - this.low, z);
           const mask = slice * layout.area + maskOffset(face, span, x, layer - this.low, z);
@@ -297,7 +303,10 @@ class VoxelLevelMesher {
     const neighborKind = this.box.kind[neighbor]!;
     if (isOpaqueKind(neighborKind)) {
       return (
-        border && isOpaqueKind(kind) && neighborLayer > this.roof[neighborColumn]! - SKIRT_LAYERS
+        this.region.window === undefined &&
+        border &&
+        isOpaqueKind(kind) &&
+        neighborLayer > this.roof[neighborColumn]! - SKIRT_LAYERS
       );
     }
     if (neighborKind !== VoxelKind.Air && neighborKind === kind) return false;
@@ -341,7 +350,7 @@ class VoxelLevelMesher {
     const heights = new Int16Array(span * span);
     for (let z = 0; z < span; z += 1) {
       for (let x = 0; x < span; x += 1) {
-        const top = this.top[(z + margin) * width + x + margin]!;
+        const top = this.columnTop((z + margin) * width + x + margin);
         heights[z * span + x] = top === -1 ? EMPTY_HEIGHT : (this.baseLayer + top + 1) * voxelSize;
       }
     }
@@ -356,6 +365,15 @@ class VoxelLevelMesher {
       frontLayer,
       (index, layer) =>
         layer >= 0 && layer < this.box.layers && isOpaqueKind(this.box.kind[index]!),
+    );
+  }
+
+  private columnTop(column: number): number {
+    return Math.min(
+      this.top[column]!,
+      this.region.window === undefined
+        ? this.box.layers - 1
+        : (this.region.window.maxY - this.region.low) / this.region.voxelSize - 1,
     );
   }
 

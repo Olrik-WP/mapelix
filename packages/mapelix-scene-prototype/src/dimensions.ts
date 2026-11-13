@@ -76,8 +76,39 @@ export const DIMENSIONS: Readonly<Record<Dimension, DimensionConfig>> = {
   },
 };
 
-export interface SceneContext {
+export type ViewMode = "surface" | "caves";
+
+export interface VerticalBounds {
+  readonly minY: number;
+  /** Exclusive upper block bound. */
+  readonly maxY: number;
+}
+
+/** Initial cave capabilities; adapters may impose smaller streaming/cache budgets. */
+export const CAVE_LIMITS = {
+  thicknesses: [16, 32] as readonly number[],
+  defaultThickness: 32,
+  maxLevel: 1,
+  viewDistance: 128,
+  memoryBudget: 32 * 1024 * 1024,
+} as const;
+
+export interface SceneContextOptions {
+  readonly mode?: ViewMode;
+  readonly minY?: number;
+  readonly maxY?: number;
+  /** Legacy alias for the exclusive maxY. Equal aliases are accepted. */
+  readonly ceilingY?: number;
+}
+
+/** Accepts legacy dimension/ceiling metadata as well as the canonical context. */
+export interface SceneContextInput extends SceneContextOptions {
   readonly dimension: Dimension;
+}
+
+export interface SceneContext extends VerticalBounds {
+  readonly dimension: Dimension;
+  readonly mode: ViewMode;
   readonly ceilingY: number;
 }
 
@@ -90,41 +121,99 @@ export function parseDimension(value: unknown): Dimension {
 }
 
 /** Ceilings align to 16 blocks so every LOD has the same exact cut boundary. */
-export function sceneContext(dimension: Dimension = "overworld", ceilingY?: number): SceneContext {
+export function sceneContext(
+  dimension: Dimension = "overworld",
+  options: number | SceneContextOptions = {},
+): SceneContext {
   const config = DIMENSIONS[parseDimension(dimension)];
-  const ceiling = ceilingY ?? config.defaultCeilingY;
-  if (
-    !Number.isSafeInteger(ceiling) ||
-    ceiling % 16 !== 0 ||
-    ceiling <= config.minY ||
-    ceiling > config.maxY
-  ) {
-    throw new RangeError(
-      `ceilingY must be a multiple of 16 above ${config.minY} and at most ${config.maxY}`,
-    );
+  const input = typeof options === "number" ? { ceilingY: options } : options;
+  const mode = input.mode ?? "surface";
+  if (mode !== "surface" && mode !== "caves") throw new RangeError("Unsupported view mode");
+  if (input.maxY !== undefined && input.ceilingY !== undefined && input.maxY !== input.ceilingY) {
+    throw new RangeError("maxY and ceilingY must agree");
   }
-  return { dimension, ceilingY: ceiling };
+  const upper = input.maxY ?? input.ceilingY;
+  const minY =
+    input.minY ??
+    (mode === "caves" && upper !== undefined ? upper - CAVE_LIMITS.defaultThickness : config.minY);
+  const maxY =
+    upper ?? (mode === "caves" ? minY + CAVE_LIMITS.defaultThickness : config.defaultCeilingY);
+  if (
+    !Number.isSafeInteger(minY) ||
+    !Number.isSafeInteger(maxY) ||
+    minY % 16 !== 0 ||
+    maxY % 16 !== 0 ||
+    minY < config.minY ||
+    maxY > config.maxY ||
+    minY >= maxY
+  ) {
+    throw new RangeError(`Vertical bounds must align to 16 within ${config.minY}..${config.maxY}`);
+  }
+  if (mode === "surface" && minY !== config.minY)
+    throw new RangeError("A raised minY requires caves mode");
+  if (mode === "caves" && !CAVE_LIMITS.thicknesses.includes(maxY - minY)) {
+    throw new RangeError("Cave thickness must be 16 or 32 blocks");
+  }
+  return { dimension, mode, minY, maxY, ceilingY: maxY };
 }
 
 export function contextFromSearch(params: URLSearchParams): SceneContext {
-  const ceiling = params.get("ceilingY");
-  return sceneContext(
-    parseDimension(params.get("dimension")),
-    ceiling === null ? undefined : Number(ceiling),
+  const number = (name: string): number | undefined => {
+    const raw = params.get(name);
+    if (raw === null) return undefined;
+    return raw.trim() === "" ? NaN : Number(raw);
+  };
+  const mode = params.get("mode") ?? "surface";
+  if (mode !== "surface" && mode !== "caves") throw new RangeError("Unsupported view mode");
+  return sceneContext(parseDimension(params.get("dimension")), {
+    mode,
+    ...optional("minY", number("minY")),
+    ...optional("maxY", number("maxY")),
+    ...optional("ceilingY", number("ceilingY")),
+  });
+}
+
+export function contextKey(input: SceneContextInput): string {
+  const context = sceneContext(input.dimension, input);
+  // Keep legacy Surface/Nether/End paths reusable; their floor is fixed by dimension.
+  return context.mode === "surface"
+    ? `${context.dimension}/${context.maxY}`
+    : `${context.dimension}/caves/${context.minY}/${context.maxY}`;
+}
+
+export function contextSearch(input: SceneContextInput): URLSearchParams {
+  const context = sceneContext(input.dimension, input);
+  return new URLSearchParams(
+    context.mode === "surface"
+      ? { dimension: context.dimension, ceilingY: String(context.maxY) }
+      : {
+          dimension: context.dimension,
+          mode: "caves",
+          minY: String(context.minY),
+          maxY: String(context.maxY),
+        },
   );
 }
 
-export function contextKey(context: SceneContext): string {
-  return `${context.dimension}/${context.ceilingY}`;
-}
-
-export function contextSearch(context: SceneContext): URLSearchParams {
-  return new URLSearchParams({ dimension: context.dimension, ceilingY: String(context.ceilingY) });
-}
-
 export function regionCacheKey(
-  context: SceneContext,
+  context: SceneContextInput,
   region: { readonly level: number; readonly x: number; readonly z: number },
 ): string {
   return `${contextKey(context)}/${region.level}/${region.x}/${region.z}`;
+}
+
+/** Full source sections around a cut preserve natural neighbor culling at both planes. */
+export function paddedBounds(bounds: VerticalBounds, dimension: Dimension): VerticalBounds {
+  const config = DIMENSIONS[dimension];
+  return {
+    minY: Math.max(config.minY, Math.floor((bounds.minY - 1) / 16) * 16),
+    maxY: Math.min(config.maxY, Math.ceil((bounds.maxY + 1) / 16) * 16),
+  };
+}
+
+function optional<K extends string>(
+  name: K,
+  value: number | undefined,
+): Partial<Record<K, number>> {
+  return value === undefined ? {} : ({ [name]: value } as Record<K, number>);
 }

@@ -25,7 +25,6 @@ import type { GeometryMode } from "../dimensions.js";
 import { BlockPalette, PALETTE_ID_MASK, Shape, TintCode, WATERLOGGED } from "./block-palette.js";
 import {
   NO_BLOCK,
-  VOLUME_HEIGHT,
   VOLUME_LAYER,
   VOLUME_MARGIN,
   VOLUME_SIZE,
@@ -77,6 +76,9 @@ class VoxelMesher {
   private readonly volume: RegionVolume;
   private readonly palette: BlockPalette;
   private readonly cells: Uint16Array;
+  private readonly baseY: number;
+  private readonly limitY: number;
+  private readonly caveTints = new Map<number, Uint32Array[]>();
   /** Covered air cells that connect to the sky. Open air above `topSolid` is implied. */
   private reached: Uint8Array = new Uint8Array(0);
   /** Lowest open cell of each volume column, in layers above `WORLD_MIN_Y`. */
@@ -98,6 +100,10 @@ class VoxelMesher {
     this.volume = volume;
     this.palette = palette;
     this.cells = volume.cells;
+    this.baseY = volume.baseY ?? WORLD_MIN_Y;
+    this.limitY = volume.limitY ?? WORLD_MAX_Y;
+    this.low = this.minY = this.limitY;
+    this.maxY = this.baseY;
     this.tints = blendColumnTints(
       { biomes: volume.biomes, stride: VOLUME_SIZE },
       VOLUME_MARGIN,
@@ -119,8 +125,8 @@ class VoxelMesher {
       x: regionX,
       z: regionZ,
       heights: this.heights(),
-      minY: this.minY === WORLD_MAX_Y ? 0 : this.minY,
-      maxY: this.minY === WORLD_MAX_Y ? 0 : this.maxY,
+      minY: this.minY === this.limitY ? 0 : this.minY,
+      maxY: this.minY === this.limitY ? 0 : this.maxY,
       opaque: partitionLavaQuads(this.opaque.finish()),
       plants: this.plants.finish(),
       translucent: this.translucent.finish(),
@@ -130,15 +136,17 @@ class VoxelMesher {
   /** Finds the air under overhangs, eaves, canopies, and platforms that the open sky reaches. */
   private findOpenAir(): void {
     if (this.geometry !== "surface") {
-      // Nether and End start at y=0. Their complete volumes keep every internal face.
-      this.lowestOpen = new Int16Array(VOLUME_LAYER).fill(1 - WORLD_MIN_Y);
+      // Legacy dimension floors stay unchanged; caves also keep enclosed negative-Y faces.
+      this.lowestOpen = new Int16Array(VOLUME_LAYER).fill(
+        this.volume.window === undefined ? 1 - this.baseY : 1,
+      );
       return;
     }
     const open = findOpenAir(
       {
         size: VOLUME_SIZE,
-        layers: VOLUME_HEIGHT,
-        roof: this.volume.topSolid.map((y) => y - WORLD_MIN_Y),
+        layers: this.limitY - this.baseY,
+        roof: this.volume.topSolid.map((y) => y - this.baseY),
         isOpaque: (index) => this.isOpaque(index),
       },
       COVER_DEPTH,
@@ -152,7 +160,6 @@ class VoxelMesher {
    * cell around a column bounds the blocks worth testing there.
    */
   private findColumnRanges(): void {
-    const { topBlock } = this.volume;
     for (let z = 0; z < SPAN; z += 1) {
       for (let x = 0; x < SPAN; x += 1) {
         const column = (z + VOLUME_MARGIN) * VOLUME_SIZE + x + VOLUME_MARGIN;
@@ -160,9 +167,9 @@ class VoxelMesher {
         for (const step of NEIGHBOR_COLUMNS) {
           lowest = Math.min(lowest, this.lowestOpen[column + step]!);
         }
-        const low = Math.max(WORLD_MIN_Y, lowest + WORLD_MIN_Y - 1);
+        const low = Math.max(this.volume.window?.minY ?? this.baseY, lowest + this.baseY - 1);
         this.columnLow[z * SPAN + x] = low;
-        const top = topBlock[column]!;
+        const top = this.columnTop(column);
         if (top === NO_BLOCK) continue;
         this.low = Math.min(this.low, low);
         this.high = Math.max(this.high, top);
@@ -180,11 +187,11 @@ class VoxelMesher {
     for (let z = 0; z < SPAN; z += 1) {
       for (let x = 0; x < SPAN; x += 1) {
         const column = (z + VOLUME_MARGIN) * VOLUME_SIZE + x + VOLUME_MARGIN;
-        const top = this.volume.topBlock[column]!;
+        const top = this.columnTop(column);
         for (let y = this.columnLow[z * SPAN + x]!; y <= top; y += 1) {
           const slice = maskSlice(face, x, y - this.low, z);
           const mask = slice * layout.area + maskOffset(face, SPAN, x, y - this.low, z);
-          const index = cellIndex(x + VOLUME_MARGIN, y, z + VOLUME_MARGIN);
+          const index = cellIndex(x + VOLUME_MARGIN, y, z + VOLUME_MARGIN, this.baseY);
           if (this.writeFace(face, index, y, column, keys, colors, mask)) used[slice] = 1;
         }
       }
@@ -241,8 +248,8 @@ class VoxelMesher {
     const neighborY = y + NORMAL_LAYER[face]!;
     const neighborColumn = column + STEPS.column[face]!;
     if (boundary) {
-      if (neighborY < WORLD_MIN_Y) return false;
-      if (neighborY < WORLD_MAX_Y) {
+      if (neighborY < this.baseY) return false;
+      if (neighborY < this.limitY) {
         if (this.hides(this.cells[neighbor]!, face, id)) return false;
         if (!this.isOpen(neighbor, neighborY, neighborColumn)) return false;
       }
@@ -255,7 +262,7 @@ class VoxelMesher {
       : this.occlusion(face, index, y);
     // Grass sides carry the tinted top color; the shader draws soil below its strip.
     const covered = this.palette.covered[id] === 1 && !isFlatFace(face);
-    const color = this.colorOf(id, covered ? Face.PositiveY : face, column);
+    const color = this.colorOf(id, covered ? Face.PositiveY : face, column, y);
     const key = mergeKey(this.palette.material[id]!, size, inset, anchoredTop, face);
     keys[mask] = covered ? (key | KEY_COVERED) >>> 0 : key;
     colors[mask] = packQuadWord2(color, occlusion);
@@ -272,14 +279,14 @@ class VoxelMesher {
     colors: Uint32Array,
     mask: number,
   ): boolean {
-    const surface = y + 1 >= WORLD_MAX_Y || !this.isWater(this.cells[index + VOLUME_LAYER]!);
+    const surface = y + 1 >= this.limitY || !this.isWater(this.cells[index + VOLUME_LAYER]!);
     const size = surface ? WATER_SURFACE_SIZE : 16;
     if (face === Face.PositiveY && surface) {
       if (!this.isOpen(index, y, column)) return false;
     } else {
       const neighborY = y + NORMAL_LAYER[face]!;
-      if (neighborY < WORLD_MIN_Y) return false;
-      if (neighborY < WORLD_MAX_Y) {
+      if (neighborY < this.baseY) return false;
+      if (neighborY < this.limitY) {
         const neighbor = index + STEPS.normal[face]!;
         const neighborCell = this.cells[neighbor]!;
         const neighborShape = this.palette.shape[neighborCell & PALETTE_ID_MASK]!;
@@ -288,7 +295,7 @@ class VoxelMesher {
       }
     }
     keys[mask] = mergeKey(QuadMaterial.Water, size, 0, false, face);
-    colors[mask] = packQuadWord2(this.tintOf(TintCode.Water, column), FULLY_LIT);
+    colors[mask] = packQuadWord2(this.tintOf(TintCode.Water, column, y), FULLY_LIT);
     return true;
   }
 
@@ -303,14 +310,14 @@ class VoxelMesher {
   ): boolean {
     const id = this.cells[index]! & PALETTE_ID_MASK;
     const above =
-      y + 1 < WORLD_MAX_Y &&
+      y + 1 < this.limitY &&
       this.palette.shape[this.cells[index + VOLUME_LAYER]! & PALETTE_ID_MASK] === Shape.Lava;
     const fill = above ? 16 : this.palette.boxSize[id]!;
     const neighborY = y + NORMAL_LAYER[face]!;
-    if (neighborY < WORLD_MIN_Y) return false;
+    if (neighborY < this.baseY) return false;
     if (face === Face.PositiveY && fill < 16) {
       if (!this.isOpen(index, y, column)) return false;
-    } else if (neighborY < WORLD_MAX_Y) {
+    } else if (neighborY < this.limitY) {
       const neighbor = index + STEPS.normal[face]!;
       const neighborId = this.cells[neighbor]! & PALETTE_ID_MASK;
       const neighborShape = this.palette.shape[neighborId]!;
@@ -330,7 +337,7 @@ class VoxelMesher {
     );
     keys[mask] =
       (mergeKey(QuadMaterial.Emissive, fill, 0, false, face) | KEY_LAVA | (flow << 12)) >>> 0;
-    colors[mask] = packQuadWord2(this.colorOf(id, face, column), FULLY_LIT);
+    colors[mask] = packQuadWord2(this.colorOf(id, face, column, y), FULLY_LIT);
     return true;
   }
 
@@ -374,9 +381,9 @@ class VoxelMesher {
     for (let z = 0; z < SPAN; z += 1) {
       for (let x = 0; x < SPAN; x += 1) {
         const column = (z + VOLUME_MARGIN) * VOLUME_SIZE + x + VOLUME_MARGIN;
-        const top = this.volume.topBlock[column]!;
+        const top = this.columnTop(column);
         for (let y = this.columnLow[z * SPAN + x]!; y <= top; y += 1) {
-          const index = cellIndex(x + VOLUME_MARGIN, y, z + VOLUME_MARGIN);
+          const index = cellIndex(x + VOLUME_MARGIN, y, z + VOLUME_MARGIN, this.baseY);
           const id = this.cells[index]! & PALETTE_ID_MASK;
           if (palette.shape[id] !== Shape.Plant || !this.isOpen(index, y, column)) continue;
           const box = {
@@ -385,7 +392,7 @@ class VoxelMesher {
             anchoredTop: false,
           };
           const word1 = packQuadWord1(1, 1, box, spriteOf(palette.sprite[id]!));
-          const word2 = packQuadWord2(this.colorOf(id, Face.PositiveY, column), FULLY_LIT);
+          const word2 = packQuadWord2(this.colorOf(id, Face.PositiveY, column, y), FULLY_LIT);
           this.plants.push(packQuadWord0(x, y, z, Face.CrossA, QuadMaterial.Plant), word1, word2);
           this.plants.push(packQuadWord0(x, y, z, Face.CrossB, QuadMaterial.Plant), word1, word2);
           if (this.geometry !== "surface") {
@@ -403,13 +410,13 @@ class VoxelMesher {
     for (let z = 0; z < SPAN; z++)
       for (let x = 0; x < SPAN; x++) {
         const column = (z + VOLUME_MARGIN) * VOLUME_SIZE + x + VOLUME_MARGIN;
-        for (let y = this.columnLow[z * SPAN + x]!; y <= this.volume.topBlock[column]!; y++) {
-          const index = cellIndex(x + VOLUME_MARGIN, y, z + VOLUME_MARGIN);
+        for (let y = this.columnLow[z * SPAN + x]!; y <= this.columnTop(column); y++) {
+          const index = cellIndex(x + VOLUME_MARGIN, y, z + VOLUME_MARGIN, this.baseY);
           const id = this.cells[index]! & PALETTE_ID_MASK;
           const model = palette.models[id];
           if (model === undefined || !this.isOpen(index, y, column)) continue;
           const parts = blockModelParts(model, (dx, dy, dz) => {
-            if (y + dy < WORLD_MIN_Y || y + dy >= WORLD_MAX_Y) return { opaque: false };
+            if (y + dy < this.baseY || y + dy >= this.limitY) return { opaque: false };
             const other =
               this.cells[index + dx + dy * VOLUME_LAYER + dz * VOLUME_SIZE]! & PALETTE_ID_MASK;
             return {
@@ -433,7 +440,7 @@ class VoxelMesher {
               const plane = part.bounds[axis + ((face & 1) === 0 ? 3 : 0)]!;
               const boundary = plane === ((face & 1) === 0 ? 16 : 0);
               const neighborY = y + NORMAL_LAYER[face]!;
-              if (boundary && neighborY >= WORLD_MIN_Y && neighborY < WORLD_MAX_Y) {
+              if (boundary && neighborY >= this.baseY && neighborY < this.limitY) {
                 const neighbor = index + STEPS.normal[face]!;
                 if (
                   this.hides(this.cells[neighbor]!, face, id) ||
@@ -441,7 +448,7 @@ class VoxelMesher {
                 )
                   continue;
               }
-              const color = part.color ?? this.colorOf(id, face, column);
+              const color = part.color ?? this.colorOf(id, face, column, y);
               const occlusion =
                 material === QuadMaterial.Emissive
                   ? FULLY_LIT
@@ -466,7 +473,7 @@ class VoxelMesher {
     const heights = new Int16Array(SPAN * SPAN);
     for (let z = 0; z < SPAN; z += 1) {
       for (let x = 0; x < SPAN; x += 1) {
-        const top = this.volume.topBlock[(z + VOLUME_MARGIN) * VOLUME_SIZE + x + VOLUME_MARGIN]!;
+        const top = this.columnTop((z + VOLUME_MARGIN) * VOLUME_SIZE + x + VOLUME_MARGIN);
         heights[z * SPAN + x] = top === NO_BLOCK ? EMPTY_HEIGHT : top + 1;
       }
     }
@@ -508,7 +515,7 @@ class VoxelMesher {
   }
 
   private isSolidAt(index: number, y: number): boolean {
-    return y >= WORLD_MIN_Y && y < WORLD_MAX_Y && this.isOpaque(index);
+    return y >= this.baseY && y < this.limitY && this.isOpaque(index);
   }
 
   private isOpaque(index: number): boolean {
@@ -519,15 +526,34 @@ class VoxelMesher {
     return (cell & WATERLOGGED) !== 0 || this.palette.shape[cell & PALETTE_ID_MASK] === Shape.Water;
   }
 
-  private colorOf(id: number, face: number, column: number): number {
-    const tint = this.palette.tints[id * 6 + face]!;
-    return tint === TintCode.None ? this.palette.colors[id * 6 + face]! : this.tintOf(tint, column);
+  private columnTop(column: number): number {
+    return Math.min(this.volume.topBlock[column]!, (this.volume.window?.maxY ?? this.limitY) - 1);
   }
 
-  private tintOf(tint: number, column: number): number {
+  private colorOf(id: number, face: number, column: number, y: number): number {
+    const tint = this.palette.tints[id * 6 + face]!;
+    return tint === TintCode.None
+      ? this.palette.colors[id * 6 + face]!
+      : this.tintOf(tint, column, y);
+  }
+
+  private tintOf(tint: number, column: number, y: number): number {
     const x = (column % VOLUME_SIZE) - VOLUME_MARGIN;
     const z = Math.floor(column / VOLUME_SIZE) - VOLUME_MARGIN;
-    return this.tints[tint]![z * SPAN + x]!;
+    let tints = this.tints;
+    if (this.volume.window !== undefined && this.volume.biomeAt !== undefined) {
+      const cached = this.caveTints.get(y);
+      if (cached !== undefined) tints = cached;
+      else {
+        const biomes = new Int16Array(VOLUME_LAYER);
+        for (let bz = 0; bz < VOLUME_SIZE; bz++)
+          for (let bx = 0; bx < VOLUME_SIZE; bx++)
+            biomes[bz * VOLUME_SIZE + bx] = this.volume.biomeAt(bx, y, bz) ?? -1;
+        tints = blendColumnTints({ biomes, stride: VOLUME_SIZE }, VOLUME_MARGIN, SPAN, TINT_RADIUS);
+        this.caveTints.set(y, tints);
+      }
+    }
+    return tints[tint]![z * SPAN + x]!;
   }
 }
 

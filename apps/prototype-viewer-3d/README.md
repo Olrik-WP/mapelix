@@ -16,13 +16,15 @@ Open `http://127.0.0.1:5173`. The camera starts at the world spawn.
 
 ## Settings
 
-| Variable                  | Default                                                   | Use                                  |
-| ------------------------- | --------------------------------------------------------- | ------------------------------------ |
-| `MAPELIX_WORLD_DIRECTORY` | `.local/worlds/Amelix-8-12-26/Amelix SMP` in the monorepo | The extracted Bedrock world to show. |
-| `MAPELIX_CACHE_DIRECTORY` | `/tmp/mapelix-scene-cache`                                | Where built regions are kept.        |
-| `MAPELIX_SCENE_WORKERS`   | Two fewer than the CPU cores, from two to eight           | Worker threads that build regions.   |
+| Variable                  | Default                                                   | Use                                                                        |
+| ------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `MAPELIX_WORLD_DIRECTORY` | `.local/worlds/Amelix-8-12-26/Amelix SMP` in the monorepo | The extracted Bedrock world to show.                                       |
+| `MAPELIX_CACHE_DIRECTORY` | `/tmp/mapelix-scene-cache`                                | Where built regions are kept.                                              |
+| `MAPELIX_SCENE_WORKERS`   | `1`                                                       | Worker threads per visited dimension; shared by Surface and Caves.         |
+| `MAPELIX_CAVE_MEMORY_MIB` | `16`                                                      | Separate local encoded cave cache; cave regions are not persisted to disk. |
 
-The server builds each region the first time a browser asks for it and keeps the result on disk.
+The server builds each region the first time a browser asks for it. Surface results are kept
+on disk; cave results use their own bounded memory cache and are not persisted locally.
 The cache key includes the world's table files, so a changed world builds fresh regions. Each
 region response has `x-mapelix-cache: memory`, `disk`, or `build` and a `server-timing` duration.
 
@@ -34,6 +36,10 @@ An unvisited dimension displays empty space until the copied world contains chun
 
 - Select Overworld, Nether or The End in the dimension menu. The Nether roof control hides
   terrain at and above the selected Y, in 16-block steps, before any mesh or LOD is generated.
+- Select **Caves** in the View menu to explore a vertical slice, including sealed negative-Y
+  caverns. Choose 16/32 blocks and release the depth slider to rebuild. Cave streaming uses
+  LOD 0/1, a maximum 128-block radius, fixed exploration lighting and bounded resources.
+  A slice containing only solid rock can be empty; change depth or move to another area.
 - Nether starts at the Overworld spawn divided by eight; End starts at X 100, Z 0. These
   are navigation entry points, not stored portal or player positions.
 - Drag to move. Right-drag to turn and tilt. Scroll to zoom toward the point under the cursor.
@@ -55,6 +61,12 @@ without `y` looks at the highest block at `x` and `z`.
 
 Links also retain `dimension` (`overworld`, `nether`, `the-end`) and `ceilingY`. For example,
 `?dimension=nether&ceilingY=80&x=0&z=0` opens a Nether cut at Y 80.
+
+Cave links retain `mode=caves`, `minY` and exclusive `maxY`, for example
+`?mode=caves&minY=-64&maxY=-32&x=-61&y=-48&z=25&distance=80&pitch=60`.
+The `ceilingY` alias remains accepted. See the
+[Milestone 1 notes](../../docs/underground-rendering.md) for the engine contract,
+memory lifecycle and responsibilities of production adapters.
 
 ## Validation
 

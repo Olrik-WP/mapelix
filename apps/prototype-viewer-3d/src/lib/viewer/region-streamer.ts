@@ -16,13 +16,22 @@ import {
 } from "three/webgpu";
 
 import { regionEntry, type SurfaceHit } from "./quad-collider";
-import { RegionMesh } from "./region-mesh";
+import { RegionMesh, type RegionMeshPool } from "./region-mesh";
 import type { SceneMaterials } from "./shaders/materials";
-import { DIMENSIONS, contextSearch, type SceneContext } from "@mapelix/scene-prototype/dimensions";
+import {
+  DIMENSIONS,
+  CAVE_LIMITS,
+  contextSearch,
+  sceneContext,
+  type SceneContextInput,
+} from "@mapelix/scene-prototype/dimensions";
 
 export interface StreamingOptions {
-  readonly context: SceneContext;
+  readonly context: SceneContextInput;
   readonly revision: string;
+  readonly regionBase?: string;
+  readonly regionSuffix?: string;
+  readonly meshPool?: RegionMeshPool;
   readonly materials: SceneMaterials;
   /**
    * Largest size of a voxel on screen, in pixels. A node splits into its four children
@@ -105,9 +114,13 @@ export class RegionStreamer {
   private pixelsPerBlock = 1;
   private viewDistance: number;
   private disposed = false;
+  private readonly context;
+  private readonly maxLevel: number;
 
   constructor(options: StreamingOptions) {
     this.options = options;
+    this.context = sceneContext(options.context.dimension, options.context);
+    this.maxLevel = this.context.mode === "caves" ? CAVE_LIMITS.maxLevel : MAX_REGION_LEVEL;
     this.viewDistance = options.viewDistance;
     this.root.matrixAutoUpdate = false;
   }
@@ -145,7 +158,7 @@ export class RegionStreamer {
 
     const wanted: Wanted[] = [];
     const draw: RegionMesh[] = [];
-    const span = regionSpan(MAX_REGION_LEVEL);
+    const span = regionSpan(this.maxLevel);
     const reach = this.viewDistance;
     const { x, z } = this.cameraPosition;
     for (
@@ -158,7 +171,7 @@ export class RegionStreamer {
         rootX <= Math.floor((x + reach) / span);
         rootX += 1
       ) {
-        this.resolve(node(MAX_REGION_LEVEL, rootX, rootZ), draw, wanted);
+        this.resolve(node(this.maxLevel, rootX, rootZ), draw, wanted);
       }
     }
 
@@ -334,17 +347,22 @@ export class RegionStreamer {
   private request(target: RegionNode): void {
     const controller = new AbortController();
     this.requests.set(target.key, controller);
-    const params = contextSearch(this.options.context);
+    const params = contextSearch(this.context);
     params.set("revision", this.options.revision);
-    const url = `/regions/${target.level}/${target.x}/${target.z}?${params}`;
+    const base = this.options.regionBase ?? "/regions";
+    const suffix = this.options.regionSuffix ?? "";
+    const url = `${base}/${target.level}/${target.x}/${target.z}${suffix}?${params}`;
     fetch(url, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`Region ${target.key} failed with ${response.status}`);
         const bytes = await response.arrayBuffer();
         if (this.disposed || controller.signal.aborted) return;
         const region = decodeSceneRegion(new Uint8Array(bytes));
-        const mesh = new RegionMesh(region, this.options.materials);
-        this.store(target, mesh.isEmpty ? undefined : mesh);
+        const mesh = new RegionMesh(region, this.options.materials, this.options.meshPool);
+        if (mesh.isEmpty) {
+          mesh.dispose();
+          this.store(target, undefined);
+        } else this.store(target, mesh);
       })
       .catch((cause: unknown) => {
         if (this.disposed || controller.signal.aborted) return;
@@ -364,15 +382,20 @@ export class RegionStreamer {
   }
 
   private evict(): void {
-    if (this.bytes <= this.options.memoryBudget) return;
+    // Empty regions cost no quad bytes but still need a bounded metadata cache.
+    const maxEntries = this.context.mode === "caves" ? 256 : 8192;
+    if (this.bytes <= this.options.memoryBudget && this.cache.size <= maxEntries) return;
     const stale = [...this.cache.entries()]
       .filter(([key, { mesh }]) => !this.drawn.has(key) && !(mesh && this.fades.has(mesh)))
       .sort(([, left], [, right]) => left.lastDrawn - right.lastDrawn);
     for (const [key, cached] of stale) {
-      if (this.bytes <= this.options.memoryBudget * 0.85) break;
+      if (this.bytes <= this.options.memoryBudget * 0.85 && this.cache.size <= maxEntries) break;
       this.cache.delete(key);
       this.bytes -= cached.mesh?.byteLength ?? 0;
       cached.mesh?.dispose();
+    }
+    if (this.context.mode === "caves" && this.bytes > this.options.memoryBudget) {
+      this.viewDistance = Math.max(32, this.viewDistance * 0.75);
     }
   }
 
@@ -385,9 +408,14 @@ export class RegionStreamer {
   private distanceTo(target: RegionNode): number {
     const span = regionSpan(target.level);
     const cached = this.cache.get(target.key)?.mesh?.region;
-    const { dimension, ceilingY } = this.options.context;
-    const low = dimension === "overworld" ? TYPICAL_LOW : DIMENSIONS[dimension].minY;
-    const high = dimension === "overworld" ? TYPICAL_HIGH : ceilingY;
+    const { dimension, minY, maxY, mode } = this.context;
+    const low =
+      mode === "caves"
+        ? minY
+        : dimension === "overworld"
+          ? TYPICAL_LOW
+          : DIMENSIONS[dimension].minY;
+    const high = mode === "caves" ? maxY : dimension === "overworld" ? TYPICAL_HIGH : maxY;
     this.box.min.set(target.x * span, cached?.minY ?? low, target.z * span);
     this.box.max.set((target.x + 1) * span, cached?.maxY ?? high, (target.z + 1) * span);
     return this.box.distanceToPoint(this.cameraPosition);
@@ -396,15 +424,19 @@ export class RegionStreamer {
   /** Nearer nodes load first; nodes outside the view wait behind visible ones. */
   private priority(target: RegionNode, distance: number): number {
     const span = regionSpan(target.level);
-    const { dimension, ceilingY } = this.options.context;
+    const { dimension, minY, maxY, mode } = this.context;
     this.box.min.set(
       target.x * span,
-      dimension === "overworld" ? TYPICAL_LOW - 64 : DIMENSIONS[dimension].minY,
+      mode === "caves"
+        ? minY
+        : dimension === "overworld"
+          ? TYPICAL_LOW - 64
+          : DIMENSIONS[dimension].minY,
       target.z * span,
     );
     this.box.max.set(
       (target.x + 1) * span,
-      dimension === "overworld" ? TYPICAL_HIGH + 64 : ceilingY,
+      mode === "caves" ? maxY : dimension === "overworld" ? TYPICAL_HIGH + 64 : maxY,
       (target.z + 1) * span,
     );
     return this.frustum.intersectsBox(this.box) ? distance : distance * 3 + span;

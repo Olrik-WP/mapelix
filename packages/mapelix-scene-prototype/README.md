@@ -44,6 +44,19 @@ choose their own entry points into other dimensions.
 See [milestone notes](../../docs/native-dimensions.md) for validation, limitations and the
 Bedrock Control API handoff.
 
+## Underground windows
+
+`buildRegion({ mode: "caves", minY: -64, maxY: -32, level: 0, x, z })` keeps
+natural enclosed cave faces in a half-open vertical window. Initial thicknesses
+are 16/32 blocks (32 by default), aligned to 16, at LOD 0/1. `ceilingY` remains
+an exact alias for the exclusive `maxY`. Omitting `mode` preserves previous
+Surface/Nether/End geometry and default bounds.
+
+The browser-safe context helpers normalize aliases and isolate cave cache keys
+from Surface keys. Adapters must also namespace by snapshot revision. Binary
+format remains 2. See [underground rendering](../../docs/underground-rendering.md)
+for resource ownership, limits and the future API/embed 3 integration handoff.
+
 ## Regions
 
 Regions form a quadtree. A level 0 region covers 64 by 64 blocks, and each level up covers twice

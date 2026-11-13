@@ -2,7 +2,12 @@ import { replaceState } from "$app/navigation";
 import { page } from "$app/state";
 
 import type { CameraView } from "$lib/viewer/world-viewer";
-import { contextFromSearch, type SceneContext } from "@mapelix/scene-prototype/dimensions";
+import {
+  contextFromSearch,
+  contextSearch,
+  type SceneContext,
+  type SceneContextInput,
+} from "@mapelix/scene-prototype/dimensions";
 
 export interface UrlView {
   readonly context: SceneContext;
@@ -37,10 +42,10 @@ export function readViewFromUrl(url: URL): UrlView {
 }
 
 /** Writes the current view back into the address bar so it can be shared. */
-export function writeViewToUrl(view: CameraView, hour: number, context: SceneContext): void {
+export function writeViewToUrl(view: CameraView, hour: number, context: SceneContextInput): void {
   const url = new URL(window.location.href);
-  url.searchParams.set("dimension", context.dimension);
-  url.searchParams.set("ceilingY", String(context.ceilingY));
+  for (const key of ["dimension", "ceilingY", "mode", "minY", "maxY"]) url.searchParams.delete(key);
+  for (const [key, value] of contextSearch(context)) url.searchParams.set(key, value);
   url.searchParams.set("x", view.x.toFixed(0));
   url.searchParams.set("y", view.y.toFixed(0));
   url.searchParams.set("z", view.z.toFixed(0));

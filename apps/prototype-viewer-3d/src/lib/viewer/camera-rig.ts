@@ -2,6 +2,7 @@ import { MapControls } from "three/addons/controls/MapControls.js";
 import { MathUtils, Quaternion, Ray, Vector3, type PerspectiveCamera } from "three/webgpu";
 
 import type { SurfaceHit } from "./quad-collider";
+import { CAVE_LIMITS, type VerticalBounds } from "@mapelix/scene-prototype/dimensions";
 
 /** What the camera reads from the loaded terrain. */
 export interface Terrain {
@@ -74,6 +75,8 @@ export class CameraRig {
   private flight: Flight | undefined;
   /** After a jump, the orbit point eases onto the ground until the user takes over. */
   private settling = false;
+  private window: VerticalBounds | undefined;
+  private zoomUnlocked = false;
 
   constructor(camera: PerspectiveCamera, element: HTMLElement, terrain: Terrain) {
     this.camera = camera;
@@ -130,12 +133,16 @@ export class CameraRig {
       Math.PI / 2 - this.controls.minPolarAngle,
     );
     this.flight = undefined;
-    this.settling = options.settle;
+    this.settling = options.settle && this.window === undefined;
     this.controls.target.set(view.x, view.y, view.z);
+    const distance =
+      this.window === undefined
+        ? view.distance
+        : MathUtils.clamp(view.distance, 6, this.controls.maxDistance);
     this.camera.position.set(
-      view.x + Math.sin(azimuth) * Math.cos(pitch) * view.distance,
-      view.y + Math.sin(pitch) * view.distance,
-      view.z + Math.cos(azimuth) * Math.cos(pitch) * view.distance,
+      view.x + Math.sin(azimuth) * Math.cos(pitch) * distance,
+      view.y + Math.sin(pitch) * distance,
+      view.z + Math.cos(azimuth) * Math.cos(pitch) * distance,
     );
     this.controls.update();
     this.clearPosition.copy(this.camera.position);
@@ -143,7 +150,20 @@ export class CameraRig {
 
   /** Lets the camera zoom out past the usual limit. Locking again brings it back within it. */
   setZoomUnlocked(unlocked: boolean): void {
-    this.controls.maxDistance = unlocked ? UNLOCKED_ZOOM_LIMIT : ZOOM_LIMIT;
+    this.zoomUnlocked = unlocked;
+    this.controls.maxDistance =
+      this.window === undefined
+        ? unlocked
+          ? UNLOCKED_ZOOM_LIMIT
+          : ZOOM_LIMIT
+        : CAVE_LIMITS.viewDistance * 0.75;
+  }
+
+  /** Cave focus stays in the selected slice and never settles onto a surface heightmap. */
+  setVerticalWindow(window: VerticalBounds | undefined): void {
+    this.window = window;
+    if (window !== undefined) this.settling = false;
+    this.setZoomUnlocked(this.zoomUnlocked);
   }
 
   /** Glides to a column, arcing higher for longer trips so the terrain stays readable. */
@@ -156,7 +176,7 @@ export class CameraRig {
       fromTarget,
       toTarget,
       offset: this.camera.position.clone().sub(fromTarget),
-      lift: Math.min(3, travel / 500),
+      lift: this.window === undefined ? Math.min(3, travel / 500) : 0,
       seconds: MathUtils.clamp(0.8 + travel / 2500, 0.8, 2.6),
       elapsed: 0,
     };
@@ -184,6 +204,11 @@ export class CameraRig {
     if (this.flight === undefined) {
       if (this.settling) this.settle(delta);
       else this.collide();
+    }
+    if (this.window !== undefined) {
+      const y = MathUtils.clamp(this.controls.target.y, this.window.minY, this.window.maxY - 1);
+      this.camera.position.y += y - this.controls.target.y;
+      this.controls.target.y = y;
     }
     this.clearPosition.copy(this.camera.position);
 
@@ -237,7 +262,7 @@ export class CameraRig {
     this.camera.position.copy(this.controls.target).addScaledVector(flight.offset, rise);
     if (progress < 1) return;
     this.flight = undefined;
-    this.settling = true;
+    this.settling = this.window === undefined;
   }
 
   private applyKeys(delta: number): void {

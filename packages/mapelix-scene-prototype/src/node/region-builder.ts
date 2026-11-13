@@ -7,9 +7,9 @@ import { meshVoxelRegion } from "../mesh/voxel-level-mesher.js";
 import { meshRegionVolume } from "../mesh/voxel-mesher.js";
 import { buildVoxelRegion } from "../mesh/voxel-region.js";
 import { ChunkSource, type Dimension } from "../world/chunk-source.js";
-import { sceneContext } from "../dimensions.js";
+import { CAVE_LIMITS, sceneContext, type SceneContextOptions } from "../dimensions.js";
 
-export interface RegionRequest {
+export interface RegionRequest extends SceneContextOptions {
   /** Exclusive upper mesh bound, in multiples of 16. Defaults to the dimension profile. */
   readonly ceilingY?: number;
   readonly level: number;
@@ -46,19 +46,31 @@ export class RegionBuilder {
     this.database.close();
   }
 
-  private mesh({ level, x, z, ceilingY }: RegionRequest): SceneRegion {
+  private mesh(request: RegionRequest): SceneRegion {
+    const { level, x, z } = request;
     const config = this.chunks.config;
-    const context = sceneContext(config.dimension, ceilingY);
+    const context = sceneContext(config.dimension, request);
+    if (
+      context.mode === "caves" &&
+      (!Number.isInteger(level) || level < 0 || level > CAVE_LIMITS.maxLevel)
+    ) {
+      throw new RangeError(`Caves support LOD 0 through ${CAVE_LIMITS.maxLevel}`);
+    }
+    const window = context.mode === "caves" ? context : undefined;
+    const geometry =
+      window === undefined
+        ? config.geometry
+        : config.geometry === "islands"
+          ? "islands"
+          : "interior";
     if (level === 0) {
-      const volume = buildRegionVolume(this.chunks, this.palette, x, z, context.ceilingY);
+      const volume = buildRegionVolume(this.chunks, this.palette, x, z, context.maxY, window);
       return volume === undefined
         ? emptyRegion(level, x, z)
-        : meshRegionVolume(volume, this.palette, x, z, config.geometry);
+        : meshRegionVolume(volume, this.palette, x, z, geometry);
     }
-    const voxels = buildVoxelRegion(this.voxels, level, x, z, context.ceilingY);
-    return voxels === undefined
-      ? emptyRegion(level, x, z)
-      : meshVoxelRegion(voxels, config.geometry);
+    const voxels = buildVoxelRegion(this.voxels, level, x, z, context.maxY, window);
+    return voxels === undefined ? emptyRegion(level, x, z) : meshVoxelRegion(voxels, geometry);
   }
 }
 

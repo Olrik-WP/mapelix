@@ -1,6 +1,6 @@
 import { error } from "@sveltejs/kit";
 import { MAX_REGION_LEVEL } from "@mapelix/scene-prototype/format";
-import { contextFromSearch } from "@mapelix/scene-prototype/dimensions";
+import { CAVE_LIMITS, contextFromSearch } from "@mapelix/scene-prototype/dimensions";
 
 import { getWorldMetadata, loadRegion, type LoadedRegion } from "$lib/server/scene-world";
 
@@ -21,6 +21,9 @@ export const GET: RequestHandler = async ({ params, request, url }) => {
   }
   if (!Number.isSafeInteger(x) || !Number.isSafeInteger(z)) {
     error(400, "Region coordinates must be integers");
+  }
+  if (context.mode === "caves" && level > CAVE_LIMITS.maxLevel) {
+    error(400, `Caves support LOD 0 through ${CAVE_LIMITS.maxLevel}`);
   }
 
   const revision = url.searchParams.get("revision");

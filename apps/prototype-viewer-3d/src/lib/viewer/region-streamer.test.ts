@@ -3,7 +3,7 @@ import { Group, PerspectiveCamera } from "three/webgpu";
 import { EMPTY_HEIGHT, encodeSceneRegion } from "@mapelix/scene-prototype/format";
 import { sceneContext } from "@mapelix/scene-prototype/dimensions";
 import type { SceneMaterials } from "./shaders/materials";
-import { RegionStreamer } from "./region-streamer";
+import { RegionStreamer, type StreamingOptions } from "./region-streamer";
 
 const constructed = vi.hoisted(() => vi.fn());
 vi.mock("./region-mesh", () => ({
@@ -19,7 +19,7 @@ vi.mock("./region-mesh", () => ({
   },
 }));
 
-function stream(dimension: "overworld" | "nether") {
+function stream(dimension: "overworld" | "nether", overrides: Partial<StreamingOptions> = {}) {
   return new RegionStreamer({
     context: sceneContext(dimension),
     revision: "test-revision",
@@ -30,6 +30,7 @@ function stream(dimension: "overworld" | "nether") {
     maxRequests: 1,
     memoryBudget: 1024,
     onRegion: vi.fn(),
+    ...overrides,
   });
 }
 
@@ -62,6 +63,31 @@ afterEach(() => {
 });
 
 describe("dimension streaming lifecycle", () => {
+  it("uses canonical negative bounds, near LODs and an embedded base/suffix for caves", () => {
+    const fetcher = vi.fn<typeof fetch>(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetcher);
+    const streamer = stream("overworld", {
+      context: sceneContext("overworld", { mode: "caves", minY: -64, maxY: -32 }),
+      regionBase: "/custom/regions",
+      regionSuffix: ".bin",
+      viewDistance: 128,
+      maxRequests: 20,
+    });
+    const camera = new PerspectiveCamera(50, 1, 1, 1000);
+    camera.position.set(0, -40, 0);
+    camera.lookAt(0, -48, -10);
+    streamer.update(camera, 600);
+    expect(fetcher.mock.calls.length).toBeGreaterThan(0);
+    for (const [input] of fetcher.mock.calls) {
+      const url = new URL(String(input), "http://localhost");
+      expect(url.pathname).toMatch(/^\/custom\/regions\/[01]\/[-\d]+\/[-\d]+\.bin$/);
+      expect(url.searchParams.get("minY")).toBe("-64");
+      expect(url.searchParams.get("maxY")).toBe("-32");
+      expect(url.searchParams.get("mode")).toBe("caves");
+      expect(url.searchParams.get("revision")).toBe("test-revision");
+    }
+    streamer.dispose();
+  });
   it("qualifies region requests by dimension, ceiling and revision", () => {
     const fetcher = vi.fn<typeof fetch>(() => new Promise<Response>(() => {}));
     vi.stubGlobal("fetch", fetcher);

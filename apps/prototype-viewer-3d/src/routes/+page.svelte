@@ -2,12 +2,14 @@
   import type { Attachment } from "svelte/attachments";
   import {
     DIMENSIONS,
+    CAVE_LIMITS,
     contextKey,
     contextSearch,
     parseDimension,
     sceneContext,
     type Dimension,
     type SceneContext,
+    type ViewMode,
   } from "@mapelix/scene-prototype/dimensions";
 
   import CoordinateReadout from "$lib/components/CoordinateReadout.svelte";
@@ -35,6 +37,10 @@
   let hintVisible = $state(true);
   let dimension = $state<Dimension>("overworld");
   let ceilingY = $state(96);
+  let mode = $state<ViewMode>("surface");
+  let sliceMinY = $state(-64);
+  let sliceThickness = $state(32);
+  const surfaceCeilings = new Map<Dimension, number>();
   let switching = $state(false);
   let loadContext: ((context: SceneContext) => Promise<void>) | undefined;
 
@@ -68,6 +74,9 @@
     }
     dimension = start.context.dimension;
     ceilingY = start.context.ceilingY;
+    mode = start.context.mode;
+    sliceMinY = start.context.minY;
+    if (start.context.mode === "caves") sliceThickness = start.context.maxY - start.context.minY;
     hour = start.hour ?? DEFAULT_HOUR;
     let metadataRequest = new AbortController();
     let generation = 0;
@@ -87,16 +96,14 @@
         if (disposed || current !== generation) return;
         created?.setWorld(info, world?.dimension === info.dimension);
         world = info;
-        dimension = info.dimension;
-        ceilingY = info.ceilingY;
+        updateContext(info);
         pointed = undefined;
         snapshot = created?.snapshot();
       } catch (cause) {
         if (disposed || current !== generation) return;
         failure = cause instanceof Error ? cause.message : String(cause);
         if (world) {
-          dimension = world.dimension;
-          ceilingY = world.ceilingY;
+          updateContext(world);
         }
       } finally {
         if (current === generation) switching = false;
@@ -112,6 +119,7 @@
       const info: WorldInfo = await response.json();
       if (disposed) return;
       world = info;
+      updateContext(info);
       created = await WorldViewer.create(element, info, start.view);
       if (disposed) {
         created.dispose();
@@ -176,6 +184,31 @@
   function returnToSpawn(): void {
     if (world !== undefined) viewer?.flyTo(world.spawn.x, world.spawn.z);
   }
+
+  function updateContext(info: WorldInfo): void {
+    const context = sceneContext(info.dimension, info);
+    dimension = context.dimension;
+    mode = context.mode;
+    ceilingY = context.maxY;
+    if (mode === "caves") {
+      sliceMinY = context.minY;
+      sliceThickness = context.maxY - context.minY;
+    } else surfaceCeilings.set(dimension, context.maxY);
+  }
+
+  function changeMode(value: string): void {
+    if (value === "surface") {
+      void loadContext?.(sceneContext(dimension, surfaceCeilings.get(dimension)));
+    } else changeSlice();
+  }
+
+  function changeSlice(): void {
+    const config = DIMENSIONS[dimension];
+    sliceMinY = Math.max(config.minY, Math.min(sliceMinY, config.maxY - sliceThickness));
+    void loadContext?.(
+      sceneContext(dimension, { mode: "caves", minY: sliceMinY, maxY: sliceMinY + sliceThickness }),
+    );
+  }
 </script>
 
 <svelte:head>
@@ -196,6 +229,9 @@
   <div class="overlay">
     <div class="top-left">
       <StatusCard name={world?.name} loading={snapshot?.streaming.remaining ?? 0} {failure} />
+      {#if mode === "caves" && snapshot && snapshot.streaming.cached > 0 && snapshot.streaming.remaining === 0 && snapshot.streaming.quads === 0}
+        <p class="glass cave-hint">No cave surfaces here. Change depth or move to another area.</p>
+      {/if}
       {#if debugVisible && snapshot !== undefined}
         <DebugPanel
           {snapshot}
@@ -221,7 +257,40 @@
             <option value={config.dimension}>{config.label}</option>
           {/each}
         </select>
-        {#if dimension === "nether"}
+        <label for="view-mode">View</label>
+        <select
+          id="view-mode"
+          value={mode}
+          disabled={!viewer || switching}
+          onchange={(event) => changeMode(event.currentTarget.value)}
+        >
+          <option value="surface">Surface</option>
+          <option value="caves">Caves</option>
+        </select>
+        {#if mode === "caves"}
+          <label for="cave-thickness">Slice thickness</label>
+          <select
+            id="cave-thickness"
+            bind:value={sliceThickness}
+            disabled={switching}
+            onchange={changeSlice}
+          >
+            {#each CAVE_LIMITS.thicknesses as thickness}
+              <option value={thickness}>{thickness} blocks</option>
+            {/each}
+          </select>
+          <label for="cave-min-y">Slice: Y {sliceMinY} to {sliceMinY + sliceThickness - 1}</label>
+          <input
+            id="cave-min-y"
+            type="range"
+            min={DIMENSIONS[dimension].minY}
+            max={DIMENSIONS[dimension].maxY - sliceThickness}
+            step="16"
+            bind:value={sliceMinY}
+            disabled={switching}
+            onchange={changeSlice}
+          />
+        {:else if dimension === "nether"}
           <label for="ceiling">Hide terrain from Y {ceilingY}</label>
           <input
             id="ceiling"
@@ -248,7 +317,7 @@
           Drag to move, right-drag to turn, scroll to zoom. WASD, Q and E work too.
         </p>
       {/if}
-      {#if dimension === "overworld"}<TimeOfDay bind:hour />{/if}
+      {#if dimension === "overworld" && mode === "surface"}<TimeOfDay bind:hour />{/if}
     </div>
 
     <div class="bottom-right">
@@ -352,6 +421,14 @@
     font-size: 12px;
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  .cave-hint {
+    max-width: 280px;
+    padding: 10px 12px;
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
   }
 
   @media (max-width: 760px) {

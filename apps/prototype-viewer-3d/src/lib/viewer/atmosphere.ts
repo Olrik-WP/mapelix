@@ -113,12 +113,20 @@ export interface Daylight {
  */
 export class Atmosphere {
   private dimension: Dimension = "overworld";
+  private caves = false;
   readonly environment = uniform(0);
 
   setDimension(dimension: Dimension): void {
     this.dimension = dimension;
-    this.environment.value = DIMENSIONS[dimension].storageId;
+    this.environment.value = this.caves ? 3 : DIMENSIONS[dimension].storageId;
   }
+  setCaves(enabled: boolean): void {
+    this.caves = enabled;
+    this.environment.value = enabled ? 3 : DIMENSIONS[this.dimension].storageId;
+    this.caveLight.value = enabled ? 0.9 : 0;
+  }
+  /** Fixed exploration fill; rock colors remain readable without simulated underground sunlight. */
+  readonly caveLight = uniform(0);
   readonly sunDirection = uniform(new Vector3(0.4, 0.7, 0.3));
   readonly sunColor = uniform(new Color(0xfff1dc));
   readonly zenith = uniform(new Color(0x3d7ad8));
@@ -195,6 +203,21 @@ export class Atmosphere {
    * sets in the west, and leans south (+z) so shadows fall toward the north.
    */
   setTimeOfDay(hour: number): Daylight {
+    if (this.caves) {
+      this.daylight.value = 0.35;
+      this.sunColor.value.set(0);
+      this.zenith.value.set(0x10151b);
+      this.horizon.value.set(0x202832);
+      return {
+        direction: new Vector3(0.4, 0.7, 0.3).normalize(),
+        sunColor: new Color(0xffffff),
+        sunIntensity: 0,
+        skyColor: new Color(0xdce6ee),
+        groundColor: new Color(0x999fa8),
+        ambientIntensity: 0.75,
+        daylight: 0.35,
+      };
+    }
     if (this.dimension !== "overworld") {
       const config = DIMENSIONS[this.dimension].atmosphere;
       this.daylight.value = 0.35;

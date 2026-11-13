@@ -13,7 +13,7 @@ import {
   type ModelBounds,
 } from "@mapelix/scene-prototype/format";
 import { QuadCollider } from "./quad-collider";
-import { RegionMesh } from "./region-mesh";
+import { RegionMesh, RegionMeshPool } from "./region-mesh";
 import type { SceneMaterials } from "./shaders/materials";
 
 function region(words: Uint32Array) {
@@ -40,6 +40,36 @@ function modelFace(bounds: ModelBounds) {
 }
 
 describe("model collision and lava rendering batches", () => {
+  it("reuses bounded mesh shells while dropping old quad arrays and disposes them with their owner", () => {
+    const pool = new RegionMeshPool(1);
+    const pair = { steady: new MeshBasicNodeMaterial(), fading: new MeshBasicNodeMaterial() };
+    const materials = { terrain: pair, lava: pair, plants: pair, water: pair, glass: pair };
+    const first = new RegionMesh(
+      region(Uint32Array.from(modelFace([0, 0, 0, 16, 8, 16]))),
+      materials,
+      pool,
+    );
+    const shell = first.group.children[0] as Mesh;
+    const oldAttribute = shell.geometry.getAttribute("quad");
+    let disposed = 0;
+    shell.addEventListener("dispose", () => disposed++);
+    first.dispose();
+    expect(pool.retained).toBe(1);
+    expect(oldAttribute.array.length).toBe(0);
+    const second = new RegionMesh(
+      region(Uint32Array.from(modelFace([8, 8, 0, 16, 16, 16]))),
+      materials,
+      pool,
+    );
+    expect(second.group.children[0]).toBe(shell);
+    expect(shell.geometry.getAttribute("quad").array.length).toBe(3);
+    second.dispose();
+    pool.dispose();
+    expect(disposed).toBe(1);
+    expect(pool.retained).toBe(0);
+    pair.steady.dispose();
+    pair.fading.dispose();
+  });
   it("picks the lower tread through the empty half of a stair, and the upper tread beside it", () => {
     const collider = new QuadCollider(
       region(

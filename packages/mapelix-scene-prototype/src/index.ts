@@ -3,7 +3,7 @@ import type { RegionRequest } from "./node/region-builder.js";
 import { RegionWorkerPool, type BuiltRegion } from "./node/worker-pool.js";
 import type { Dimension } from "./world/chunk-source.js";
 import { readLevelInfo, type LevelInfo } from "./world/level-info.js";
-import { parseDimension, sceneContext } from "./dimensions.js";
+import { CAVE_LIMITS, parseDimension, sceneContext } from "./dimensions.js";
 
 export type { BuiltRegion } from "./node/worker-pool.js";
 export type { RegionRequest } from "./node/region-builder.js";
@@ -41,7 +41,10 @@ export async function openSceneWorld(options: SceneWorldOptions): Promise<SceneW
     info,
     buildRegion(request, signal) {
       assertRegionRequest(request);
-      sceneContext(dimension, request.ceilingY);
+      const context = sceneContext(dimension, request);
+      if (context.mode === "caves" && request.level > CAVE_LIMITS.maxLevel) {
+        throw new RangeError(`Caves support LOD 0 through ${CAVE_LIMITS.maxLevel}`);
+      }
       return pool.build(request, signal);
     },
     close: () => pool.close(),
