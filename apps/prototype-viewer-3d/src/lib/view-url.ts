@@ -21,6 +21,7 @@ export interface UrlView {
   readonly hour: number | undefined;
   readonly selection: HorizontalSelection | undefined;
   readonly discoveries: DiscoveryFilters | undefined;
+  readonly autoDepth: boolean | undefined;
 }
 
 const DEGREES = Math.PI / 180;
@@ -52,6 +53,12 @@ export function readViewFromUrl(url: URL): UrlView {
     context: contextFromSearch(url.searchParams),
     selection: selectionFromSearch(url.searchParams),
     discoveries: discoveryFiltersFromSearch(url.searchParams),
+    autoDepth:
+      url.searchParams.get("autoDepth") === "0"
+        ? false
+        : url.searchParams.get("autoDepth") === "1"
+          ? true
+          : undefined,
   };
 }
 
@@ -62,8 +69,10 @@ export function writeViewToUrl(
   context: SceneContextInput,
   selection?: HorizontalSelection,
   discoveries?: DiscoveryFilters,
+  autoDepth?: boolean,
 ): void {
   const url = new URL(window.location.href);
+  if (autoDepth !== undefined) url.searchParams.set("autoDepth", autoDepth ? "1" : "0");
   for (const key of ["dimension", "ceilingY", "mode", "minY", "maxY"]) url.searchParams.delete(key);
   for (const [key, value] of contextSearch(context)) url.searchParams.set(key, value);
   for (const name of ["minX", "maxX", "minZ", "maxZ"] as const) {

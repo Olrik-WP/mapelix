@@ -39,6 +39,10 @@ An unvisited dimension displays empty space until the copied world contains chun
 - Select **Caves** in the View menu to explore a vertical slice, including sealed negative-Y
   caverns. Choose 16/32 blocks and release the depth slider to rebuild. Cave streaming uses
   LOD 0/1, a maximum 128-block radius, fixed exploration lighting and bounded resources.
+  **Page Up / Page Down** or the held **Ascend / Descend** buttons move vertically.
+  **Follow depth automatically** moves the slice in 16-block steps as you approach its edge;
+  turn it off to inspect a fixed slice. This preference survives reloads and shared links.
+  **Recover view** restores an overview of the current slice without changing X/Z.
   A slice containing only solid rock can be empty; change depth or move to another area.
 - Open **Exploration area** to select the underground beneath a location. Set X/Z
   bounds or drag the 3D Move/Resize handles. Moving Y commits a new slice when released.
@@ -60,7 +64,8 @@ An unvisited dimension displays empty space until the copied world contains chun
 
 The camera turns around the surface in the middle of the view. It can go anywhere with open
 air, such as under bridges and between the floors of a build. It slides along surfaces it runs
-into and climbs over walls and steps.
+into and climbs over walls and steps. Caves instead allow movement through rock and retain
+the orbit pivot, so narrow passages cannot trap the camera.
 
 The address bar keeps the current view, so a link opens the same place. It accepts `x`, `y`,
 `z`, `distance`, `heading`, and `pitch` in blocks and degrees, and `hour` from 0 to 24. A link
@@ -80,6 +85,8 @@ documented in [Milestones 2–4](../../docs/underground-exploration.md). Local d
 indexes use a separate 4 MiB memory cache (`MAPELIX_DISCOVERY_MEMORY_MIB`), with no
 disk writes. The terrain URL base and suffix remain configurable independently
 of `discoveryBase`/`discoverySuffix` in embedded consumers.
+Optional automatic-depth loading, mobile methods and the backwards-compatible embed 3
+handoff are described in [cave navigation](../../docs/cave-navigation.md).
 
 ## Validation
 

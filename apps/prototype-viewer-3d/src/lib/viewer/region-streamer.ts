@@ -17,6 +17,7 @@ import {
 
 import { regionEntry, type SurfaceHit } from "./quad-collider";
 import { RegionMesh, type RegionMeshPool } from "./region-mesh";
+import { ExplorationRequests } from "./exploration-requests";
 import type { SceneMaterials } from "./shaders/materials";
 import {
   selectionContains,
@@ -38,6 +39,7 @@ export interface StreamingOptions {
   readonly regionBase?: string;
   readonly regionSuffix?: string;
   readonly meshPool?: RegionMeshPool;
+  readonly explorationRequests?: ExplorationRequests;
   readonly materials: SceneMaterials;
   /**
    * Largest size of a voxel on screen, in pixels. A node splits into its four children
@@ -107,6 +109,7 @@ export class RegionStreamer {
   private readonly options: StreamingOptions;
   private readonly cache = new Map<string, CachedRegion>();
   private readonly requests = new Map<string, AbortController>();
+  private readonly explorationRequests: ExplorationRequests;
   private readonly drawn = new Map<string, RegionMesh>();
   private readonly fades = new Map<RegionMesh, Fade>();
   private wanted: Wanted[] = [];
@@ -126,6 +129,8 @@ export class RegionStreamer {
 
   constructor(options: StreamingOptions) {
     this.options = options;
+    this.explorationRequests =
+      options.explorationRequests ?? new ExplorationRequests(options.maxRequests);
     this.context = sceneContext(options.context.dimension, options.context);
     this.maxLevel = this.context.mode === "caves" ? CAVE_LIMITS.maxLevel : MAX_REGION_LEVEL;
     this.viewDistance = options.viewDistance;
@@ -259,6 +264,7 @@ export class RegionStreamer {
     this.disposed = true;
     for (const controller of this.requests.values()) controller.abort();
     this.requests.clear();
+    if (!this.options.explorationRequests) this.explorationRequests.dispose();
     for (const cached of this.cache.values()) cached.mesh?.dispose();
     this.cache.clear();
     this.drawn.clear();
@@ -384,10 +390,9 @@ export class RegionStreamer {
     const base = this.options.regionBase ?? "/regions";
     const suffix = this.options.regionSuffix ?? "";
     const url = `${base}/${target.level}/${target.x}/${target.z}${suffix}?${params}`;
-    fetch(url, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Region ${target.key} failed with ${response.status}`);
-        const bytes = await response.arrayBuffer();
+    this.explorationRequests
+      .read(url, controller.signal)
+      .then((bytes) => {
         if (this.disposed || controller.signal.aborted) return;
         const region = decodeSceneRegion(new Uint8Array(bytes));
         const mesh = new RegionMesh(region, this.options.materials, this.options.meshPool);

@@ -11,11 +11,13 @@ export { WorldViewer } from "./viewer/world-viewer";
 export type {
   CameraView,
   Pointed,
+  VerticalMovement,
   ViewerSnapshot,
   WorldInfo,
   WorldViewerOptions,
 } from "./viewer/world-viewer";
 export type { StreamingStats } from "./viewer/region-streamer";
+export type { DepthNavigation } from "./viewer/depth-follow";
 export type { DiscoveryStats } from "./viewer/discovery-streamer";
 export type { SelectionChange, SelectionTool } from "./viewer/selection-box";
 export type { Dimension, SceneContext, ViewMode } from "@mapelix/scene-prototype/dimensions";
@@ -41,6 +43,10 @@ export type { HorizontalSelection } from "@mapelix/scene-prototype/selection";
  * `setWorld` switches dimension or ceiling while keeping the renderer.
  * 3: cave slices (`mode`, `minY`, `maxY` in `WorldInfo`), the X/Z selection box and
  * discovery markers, with their options, methods, constants and snapshot state.
+ * Later version 3 builds add optional members only: `loadDepth`, `autoDepth`,
+ * `autoDepthIntervalMs` and `onDepthChange` options, `setVerticalMovement`,
+ * `recoverCamera` and `setAutoDepth` methods, and `snapshot().navigation`. Hosts
+ * detect them before use.
  */
 export const EMBED_API_VERSION = 3;
 

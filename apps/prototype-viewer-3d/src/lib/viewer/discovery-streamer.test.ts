@@ -83,9 +83,34 @@ function response(url: string, indexed = true) {
   });
   return new Response(new Uint8Array(bytes).buffer);
 }
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe("discovery source reuse and lifecycle", () => {
+  it("automatically retries transient discovery errors after Retry-After", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 429, headers: { "retry-after": "4" } }))
+      .mockImplementation(async (url) => response(String(url)));
+    vi.stubGlobal("fetch", fetcher);
+    const { stream, tick } = setup();
+    stream.setSelection({ minX: 0, maxX: 32, minZ: 0, maxZ: 32 });
+    tick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stream.stats.error).toContain("Server busy");
+    tick();
+    await vi.advanceTimersByTimeAsync(3999);
+    expect(fetcher).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    tick();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(stream.stats.cached).toBe(1);
+    expect(stream.stats.error).toBeUndefined();
+    stream.dispose();
+  });
   it("waits for terrain, reuses source indexes through depth/mesh changes and uses an embedded endpoint", async () => {
     const fetcher = vi.fn<typeof fetch>(async (url) => response(String(url)));
     vi.stubGlobal("fetch", fetcher);
