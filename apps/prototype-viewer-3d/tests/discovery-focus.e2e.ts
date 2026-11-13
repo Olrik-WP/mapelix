@@ -136,6 +136,12 @@ test("surface and underground discoveries frame correctly, notify the host once,
       window.__focusViewer.snapshot().discoveries.groups.some((g) => g.y === 81),
     ),
   ).toBe(true);
+  const surfaceContainers = await page.evaluate(
+    () => window.__focusViewer.snapshot().discoveries.groups,
+  );
+  expect(surfaceContainers.find((g) => g.x === 40 && g.y === 81)).toMatchObject({ count: 2 });
+  expect(surfaceContainers.some((g) => g.x === 44 && g.y === 81)).toBe(true);
+  expect(surfaceContainers.some((g) => g.x === 54 && g.y === 74)).toBe(false);
   expect(sourceRequests).toBe(beforeFilter);
   await page.evaluate(() =>
     window.__focusViewer.setDiscoveryFilters({

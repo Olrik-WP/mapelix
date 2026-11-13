@@ -18,14 +18,16 @@ import {
 import type { WorldInfo } from "./world-viewer";
 import { ExplorationRequests, ExplorationRequestError } from "./exploration-requests";
 import { surfaceDiscoveryTiles } from "./discovery-focus";
+import { discoveryLabel, type DiscoveryLabelFormatter } from "./discovery-label";
 
 export interface DiscoveryOptions {
   readonly base?: string;
   readonly suffix?: string;
   readonly memoryBudget?: number;
   readonly explorationRequests?: ExplorationRequests;
-  readonly isSurfaceBlock?: (x: number, y: number, z: number) => boolean;
+  readonly isSurfaceBlock?: (x: number, y: number, z: number, kind: number) => boolean;
   readonly onPointerSelect?: () => void;
+  readonly formatDiscoveryLabel?: DiscoveryLabelFormatter;
   readonly onselect: (group: DiscoveryGroup) => void;
 }
 export interface DiscoveryStats extends DiscoveryQuery {
@@ -45,11 +47,19 @@ interface CachedTile {
 interface Marker {
   readonly button: HTMLButtonElement;
   group: DiscoveryGroup;
+  label: string;
+  pointerFocus: boolean;
 }
 
 /** Bounded source-tile streaming and DOM markers; no extra GPU materials, textures or buffers. */
 export class DiscoveryStreamer {
   private readonly layer = document.createElement("div");
+  private readonly label = document.createElement("div");
+  private labelled: Marker | undefined;
+  private labelWidth = 0;
+  private labelHeight = 0;
+  private labelCanvasWidth = 0;
+  private labelCanvasHeight = 0;
   private readonly cache = new Map<string, CachedTile>();
   private readonly pending = new Map<string, AbortController>();
   private readonly failed = new Set<string>();
@@ -103,6 +113,31 @@ export class DiscoveryStreamer {
     // The same positioned container owns the canvas and the overlay in embedded views.
     this.layer.style.position = "fixed";
     this.layer.style.inset = "auto";
+    this.label.hidden = true;
+    this.label.setAttribute("data-discovery-label", "");
+    // The button already provides this text through its accessible name.
+    this.label.setAttribute("aria-hidden", "true");
+    Object.assign(this.label.style, {
+      position: "absolute",
+      left: "0",
+      top: "0",
+      pointerEvents: "none",
+      zIndex: "1",
+      boxSizing: "border-box",
+      maxWidth: "calc(100% - 8px)",
+      maxHeight: "calc(100% - 8px)",
+      overflow: "hidden",
+      overflowWrap: "anywhere",
+      padding: "6px 9px",
+      border: "1px solid #ffffff40",
+      borderRadius: "6px",
+      background: "#101c2bf2",
+      color: "white",
+      font: "12px/1.4 system-ui, sans-serif",
+      textAlign: "center",
+      boxShadow: "0 2px 8px #0006",
+    });
+    this.layer.append(this.label);
     container.append(this.layer);
   }
 
@@ -168,7 +203,7 @@ export class DiscoveryStreamer {
     return (
       this.context.mode === "surface" &&
       this.isExposedDiscovery(group) &&
-      (this.options.isSurfaceBlock?.(group.x, group.y, group.z) ?? false)
+      (this.options.isSurfaceBlock?.(group.x, group.y, group.z, group.kind) ?? false)
     );
   }
 
@@ -306,8 +341,12 @@ export class DiscoveryStreamer {
         Math.abs(this.point.x) <= 1 &&
         Math.abs(this.point.y) <= 1;
       marker.button.hidden = !visible;
-      if (visible)
-        marker.button.style.transform = `translate(${((this.point.x + 1) * rect.width) / 2}px, ${((1 - this.point.y) * rect.height) / 2}px) translate(-50%, -50%)`;
+      if (visible) {
+        const x = ((this.point.x + 1) * rect.width) / 2,
+          y = ((1 - this.point.y) * rect.height) / 2;
+        marker.button.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+        if (this.labelled === marker) this.positionLabel(x, y, rect.width, rect.height);
+      } else this.hideLabel(marker);
     }
   }
 
@@ -386,6 +425,7 @@ export class DiscoveryStreamer {
     const keep = new Set(this.query.groups.map((group) => group.id));
     for (const [id, marker] of this.markers)
       if (!keep.has(id)) {
+        this.hideLabel(marker);
         marker.button.remove();
         this.markers.delete(id);
       }
@@ -411,30 +451,92 @@ export class DiscoveryStreamer {
           fontSize: "11px",
           lineHeight: "12px",
         });
-        marker = { button, group };
+        marker = { button, group, label: "", pointerFocus: false };
         const current = marker;
+        button.onpointerenter = (event) => {
+          if (event.pointerType === "mouse") this.showLabel(current);
+        };
+        button.onpointerleave = () => this.hideLabel(current);
+        button.onpointerdown = (event) => {
+          current.pointerFocus = true;
+          if (event.pointerType === "touch") this.hideLabel();
+        };
+        button.onpointercancel = () => {
+          current.pointerFocus = false;
+          this.hideLabel(current);
+        };
+        button.onfocus = () => {
+          if (!current.pointerFocus) this.showLabel(current);
+        };
+        button.onblur = () => {
+          current.pointerFocus = false;
+          this.hideLabel(current);
+        };
         button.onclick = (event) => {
           event.stopPropagation();
           if (event.detail > 0) {
             button.blur();
             this.options.onPointerSelect?.();
           }
+          current.pointerFocus = false;
           this.options.onselect(current.group);
         };
         this.markers.set(group.id, marker);
         this.layer.append(button);
       }
       marker.group = group;
-      const label = `${type.label} · ${group.count} block${group.count === 1 ? "" : "s"} · X ${group.x}, Y ${group.y}, Z ${group.z}`;
+      const label = discoveryLabel(group, type, this.options.formatDiscoveryLabel);
+      marker.label = label;
       marker.button.textContent = type.category === "ores" ? "◆" : "✦";
-      marker.button.title = label;
       marker.button.setAttribute("aria-label", label);
+      if (this.labelled === marker) this.showLabel(marker);
     }
+  }
+
+  private showLabel(marker: Marker): void {
+    if (this.disposed || marker.button.hidden) return;
+    this.labelled = marker;
+    this.label.textContent = marker.label;
+    this.label.hidden = false;
+    const bounds = this.layer.getBoundingClientRect(),
+      button = marker.button.getBoundingClientRect();
+    this.labelWidth = this.label.offsetWidth;
+    this.labelHeight = this.label.offsetHeight;
+    this.labelCanvasWidth = bounds.width;
+    this.labelCanvasHeight = bounds.height;
+    this.positionLabel(
+      button.left + button.width / 2 - bounds.left,
+      button.top + button.height / 2 - bounds.top,
+      bounds.width,
+      bounds.height,
+    );
+  }
+
+  private positionLabel(x: number, y: number, width: number, height: number): void {
+    // Remeasure only when a canvas resize can change text wrapping.
+    if (this.labelCanvasWidth !== width || this.labelCanvasHeight !== height) {
+      this.labelWidth = this.label.offsetWidth;
+      this.labelHeight = this.label.offsetHeight;
+      this.labelCanvasWidth = width;
+      this.labelCanvasHeight = height;
+    }
+    const left = Math.max(4, Math.min(width - this.labelWidth - 4, x - this.labelWidth / 2));
+    const above = y - 15 - this.labelHeight;
+    const top = Math.max(4, Math.min(height - this.labelHeight - 4, above >= 4 ? above : y + 15));
+    this.label.style.transform = `translate(${left}px, ${top}px)`;
+  }
+
+  private hideLabel(marker?: Marker): void {
+    if (marker && this.labelled !== marker) return;
+    this.labelled = undefined;
+    this.label.hidden = true;
+    this.label.textContent = "";
   }
 
   private clearMarkers(): void {
     this.cancelQuery();
-    this.layer.replaceChildren();
+    this.hideLabel();
+    this.layer.replaceChildren(this.label);
     this.markers.clear();
     this.query = { groups: [], matchingBlocks: 0, limited: false };
   }

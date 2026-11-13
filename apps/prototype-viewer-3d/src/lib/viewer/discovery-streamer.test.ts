@@ -20,8 +20,9 @@ class Element {
   remove() {
     if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this);
   }
-  replaceChildren() {
-    this.children = [];
+  replaceChildren(...children: Element[]) {
+    this.children = children;
+    for (const child of children) child.parent = this;
   }
   getBoundingClientRect() {
     return { left: 0, top: 0, width: 800, height: 600 };

@@ -133,8 +133,8 @@ export class QuadCollider {
     return hit;
   }
 
-  /** An exact LOD-0 side owned by this voxel, including merged and model faces. */
-  hasBlockFace(x: number, y: number, z: number, axis: number, sign: number): boolean {
+  /** An exact LOD-0 face owned by this voxel, including merged and model faces. */
+  hasBlockFace(x: number, y: number, z: number, axis?: number, sign?: number): boolean {
     if (this.region.level !== 0) return false;
     x -= this.region.originX;
     z -= this.region.originZ;
@@ -146,20 +146,21 @@ export class QuadCollider {
     for (const ref of tile.refs) {
       if (
         !readFace(this.lists[ref & 1]!, ref >>> 1, face) ||
-        face.axis !== axis ||
-        face.positive !== sign > 0
+        (axis !== undefined && face.axis !== axis) ||
+        (sign !== undefined && face.positive !== sign > 0)
       )
         continue;
-      const plane = face.low[axis]!,
-        coordinate = cell[axis]!;
+      const normal = face.axis,
+        plane = face.low[normal]!,
+        coordinate = cell[normal]!;
       if (
-        sign > 0
+        face.positive
           ? plane <= coordinate + epsilon || plane > coordinate + 1 + epsilon
           : plane < coordinate - epsilon || plane >= coordinate + 1 - epsilon
       )
         continue;
       if (
-        TANGENTS[axis]!.every(
+        TANGENTS[normal]!.every(
           (other) =>
             face.high[other]! > cell[other]! + epsilon &&
             face.low[other]! < cell[other]! + 1 - epsilon,

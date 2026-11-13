@@ -18,7 +18,11 @@ import { createStablePCFFilter } from "./shaders/shadow-filter";
 import { SelectionBox, type SelectionTool, type SelectionChange } from "./selection-box";
 import { horizontalSelection, type HorizontalSelection } from "@mapelix/scene-prototype/selection";
 import { DiscoveryStreamer, type DiscoveryStats } from "./discovery-streamer";
-import type { DiscoveryFilters, DiscoveryGroup } from "@mapelix/scene-prototype/discoveries";
+import {
+  DISCOVERY_KINDS,
+  type DiscoveryFilters,
+  type DiscoveryGroup,
+} from "@mapelix/scene-prototype/discoveries";
 
 import { Atmosphere } from "./atmosphere";
 import {
@@ -31,6 +35,7 @@ import {
 import { DepthFollow, type DepthNavigation } from "./depth-follow";
 import { ExplorationRequests } from "./exploration-requests";
 import { DiscoveryDetails } from "./discovery-details";
+import type { DiscoveryLabelFormatter } from "./discovery-label";
 import { discoveryContext, discoveryDistance, type DiscoveryDetailText } from "./discovery-focus";
 import { RegionStreamer, type StreamingStats } from "./region-streamer";
 import { RegionMeshPool } from "./region-mesh";
@@ -77,6 +82,8 @@ export interface WorldViewerOptions {
   readonly onDiscoverySelect?: (discovery: DiscoveryGroup) => void;
   readonly discoveryDetails?: boolean;
   readonly formatDiscoveryDetails?: (discovery: DiscoveryGroup) => DiscoveryDetailText;
+  /** Shared accessible name and immediate hover/focus label; defaults to English. */
+  readonly formatDiscoveryLabel?: DiscoveryLabelFormatter;
   readonly onDiscoveryFocusChange?: (discovery: DiscoveryGroup | undefined) => void;
 }
 
@@ -230,8 +237,14 @@ export class WorldViewer {
     this.rig.setVerticalWindow(this.context.mode === "caves" ? this.context : undefined);
     this.discoveries = new DiscoveryStreamer(container, {
       explorationRequests: this.explorationRequests,
-      isSurfaceBlock: (x, y, z) => this.streamer.isSurfaceBlock(x, y, z),
+      isSurfaceBlock: (x, y, z, kind) =>
+        DISCOVERY_KINDS[kind]?.category === "containers"
+          ? this.streamer.isRenderedSurfaceBlock(x, y, z)
+          : this.streamer.isSurfaceBlock(x, y, z),
       onPointerSelect: () => renderer.domElement.focus({ preventScroll: true }),
+      ...(options.formatDiscoveryLabel === undefined
+        ? {}
+        : { formatDiscoveryLabel: options.formatDiscoveryLabel }),
       ...(options.discoveryBase === undefined ? {} : { base: options.discoveryBase }),
       ...(options.discoverySuffix === undefined ? {} : { suffix: options.discoverySuffix }),
       ...(options.discoveryMemoryBudget === undefined

@@ -53,6 +53,8 @@ An unvisited dimension displays empty space until the copied world contains chun
   finds blocks outside the current slice. In Surface mode, leave it off for objects
   verified on the exterior surface; enable it to include covered objects as well.
   Exact terrain must be loaded to certify visibility; zoom in if needed.
+  Containers in rooms beneath roofs remain discoverable when their faces exist in the
+  detailed Surface mesh. Mouse hover or keyboard focus shows an immediate marker label.
   Clicking a verified surface object stays on Surface; any other object opens its cave slice.
   From Caves, navigation retains Caves and opens another slice when needed.
   Framing preserves orientation, approaches moderately and opens one details card.
@@ -97,6 +99,8 @@ Optional automatic-depth loading, mobile methods and the backwards-compatible em
 handoff are described in [cave navigation](../../docs/cave-navigation.md).
 Discovery framing, the Surface proximity rule and optional translated/host-owned
 details are described in [discovery navigation](../../docs/discovery-navigation.md).
+Immediate labels and the optional host label formatter are described in
+[discovery labels](../../docs/discovery-labels.md).
 
 ## Validation
 
