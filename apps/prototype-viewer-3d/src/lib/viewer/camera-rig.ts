@@ -55,12 +55,15 @@ const MOVE_KEYS = new Set([
   ...["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF"],
   ...["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"],
 ]);
+const VERTICAL_KEYS = new Set(["PageUp", "PageDown"]);
+export type VerticalMovement = -1 | 0 | 1;
 
 /**
  * Map-style camera: left drag pans, right drag orbits, and the wheel zooms toward the
  * surface under the cursor. Each drag, wheel step, or key press puts the orbit point on
  * the first surface in the middle of the view. The camera slides along surfaces it runs
  * into and climbs walls. Keyboard keys pan (WASD), turn (Q and E), and zoom (R and F).
+ * Caves retain their pivot, allow passage through walls, and add Page Up/Down movement.
  */
 export class CameraRig {
   private readonly camera: PerspectiveCamera;
@@ -78,6 +81,7 @@ export class CameraRig {
   private window: VerticalBounds | undefined;
   private zoomUnlocked = false;
   private enabled = true;
+  private heldVertical: VerticalMovement = 0;
 
   constructor(camera: PerspectiveCamera, element: HTMLElement, terrain: Terrain) {
     this.camera = camera;
@@ -102,6 +106,7 @@ export class CameraRig {
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
     window.addEventListener("blur", this.onBlur);
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
   }
 
   get focus(): Vector3 {
@@ -122,11 +127,30 @@ export class CameraRig {
     return Math.PI / 2 - this.controls.getPolarAngle();
   }
 
+  /** Input intent remains available when the focus reaches a slice boundary. */
+  get verticalMovement(): VerticalMovement {
+    if (!this.enabled || !this.window) return 0;
+    return Math.sign(
+      this.heldVertical + Number(this.keys.has("PageUp")) - Number(this.keys.has("PageDown")),
+    ) as VerticalMovement;
+  }
+
+  /** Held touch/button input, stopped on release, blur, or a view change. */
+  setVerticalMovement(direction: VerticalMovement): void {
+    this.heldVertical = this.enabled && this.window ? direction : 0;
+    if (this.heldVertical) this.takeOver();
+  }
+
   /**
    * Places the camera `distance` blocks from a point, facing `heading` and looking down by
    * `pitch`. With `settle`, the point then eases onto the ground once its region loads.
    */
   setView(view: CameraView, options: { readonly settle: boolean }): void {
+    // Drain old pan/rotation damping before applying an explicit pose or recovery.
+    const damping = this.controls.enableDamping;
+    this.controls.enableDamping = false;
+    this.controls.update();
+    this.controls.enableDamping = damping;
     const azimuth = -view.heading;
     const pitch = MathUtils.clamp(
       view.pitch,
@@ -135,14 +159,17 @@ export class CameraRig {
     );
     this.flight = undefined;
     this.settling = options.settle && this.window === undefined;
-    this.controls.target.set(view.x, view.y, view.z);
+    const y = this.window
+      ? MathUtils.clamp(view.y, this.window.minY, this.window.maxY - 1)
+      : view.y;
+    this.controls.target.set(view.x, y, view.z);
     const distance =
       this.window === undefined
         ? view.distance
         : MathUtils.clamp(view.distance, 6, this.controls.maxDistance);
     this.camera.position.set(
       view.x + Math.sin(azimuth) * Math.cos(pitch) * distance,
-      view.y + Math.sin(pitch) * distance,
+      y + Math.sin(pitch) * distance,
       view.z + Math.cos(azimuth) * Math.cos(pitch) * distance,
     );
     this.controls.update();
@@ -161,7 +188,8 @@ export class CameraRig {
   }
 
   /** Cave focus stays in the selected slice and never settles onto a surface heightmap. */
-  setVerticalWindow(window: VerticalBounds | undefined): void {
+  setVerticalWindow(window: VerticalBounds | undefined, preserveMovement = false): void {
+    if (!preserveMovement) this.stopMovement();
     this.window = window;
     if (window !== undefined) this.settling = false;
     this.setZoomUnlocked(this.zoomUnlocked);
@@ -201,11 +229,17 @@ export class CameraRig {
     if (!this.enabled) return false;
     this.fly(delta);
     this.applyKeys(delta);
+    const vertical = this.verticalMovement;
+    if (vertical) {
+      const step = vertical * 12 * delta;
+      this.controls.target.y += step;
+      this.camera.position.y += step;
+    }
     this.controls.update(delta);
     // Flights arc over the terrain on their own.
     if (this.flight === undefined) {
       if (this.settling) this.settle(delta);
-      else this.collide();
+      else if (this.window === undefined) this.collide();
     }
     if (this.window !== undefined) {
       const y = MathUtils.clamp(this.controls.target.y, this.window.minY, this.window.maxY - 1);
@@ -228,19 +262,28 @@ export class CameraRig {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("blur", this.onBlur);
+    document.removeEventListener("visibilitychange", this.onVisibilityChange);
   }
 
   /** Suspend orbit/keyboard input while a selection handle owns the pointer. */
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     this.controls.enabled = enabled;
-    if (!enabled) this.keys.clear();
+    if (!enabled) this.stopMovement();
+  }
+
+  stopMovement(): void {
+    this.keys.clear();
+    this.heldVertical = 0;
   }
 
   /** Hands the camera to the user: stops any jump and puts the orbit point on what they see. */
   private takeOver(): void {
     this.flight = undefined;
     this.settling = false;
+    // Cave navigation may pass through rock. Retargeting onto a nearby wall would
+    // repeatedly move the orbit pivot and trap the camera in narrow passages.
+    if (this.window !== undefined) return;
     const { minDistance, maxDistance, target } = this.controls;
     // The camera looks at the orbit point, so moving it along the view ray keeps the view.
     const direction = target.clone().sub(this.camera.position).normalize();
@@ -377,9 +420,14 @@ export class CameraRig {
       event.target instanceof HTMLInputElement ||
       event.target instanceof HTMLSelectElement ||
       event.target instanceof HTMLTextAreaElement ||
-      !MOVE_KEYS.has(event.code)
+      (event.target instanceof HTMLElement && event.target.isContentEditable) ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      (!MOVE_KEYS.has(event.code) && !(this.window && VERTICAL_KEYS.has(event.code)))
     )
       return;
+    event.preventDefault();
     if (!this.keys.has(event.code)) this.takeOver();
     this.keys.add(event.code);
   };
@@ -389,7 +437,11 @@ export class CameraRig {
   };
 
   private readonly onBlur = (): void => {
-    this.keys.clear();
+    this.stopMovement();
+  };
+
+  private readonly onVisibilityChange = (): void => {
+    if (document.hidden) this.stopMovement();
   };
 }
 

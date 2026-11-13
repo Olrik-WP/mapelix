@@ -21,7 +21,15 @@ import { DiscoveryStreamer, type DiscoveryStats } from "./discovery-streamer";
 import type { DiscoveryFilters, DiscoveryGroup } from "@mapelix/scene-prototype/discoveries";
 
 import { Atmosphere } from "./atmosphere";
-import { CameraRig, ZOOM_LIMIT, pointerRay, type CameraView } from "./camera-rig";
+import {
+  CameraRig,
+  ZOOM_LIMIT,
+  pointerRay,
+  type CameraView,
+  type VerticalMovement,
+} from "./camera-rig";
+import { DepthFollow, type DepthNavigation } from "./depth-follow";
+import { ExplorationRequests } from "./exploration-requests";
 import { RegionStreamer, type StreamingStats } from "./region-streamer";
 import { RegionMeshPool } from "./region-mesh";
 import { createSceneMaterials, type SceneMaterials } from "./shaders/materials";
@@ -41,10 +49,17 @@ export interface WorldInfo extends SceneContextInput {
   readonly discoveries?: { readonly schemaVersion: number; readonly tileSpan: number };
 }
 
-export type { CameraView } from "./camera-rig";
+export type { CameraView, VerticalMovement } from "./camera-rig";
 
 /** Kept across view switches so embedding does not fall back to a different server. */
 export interface WorldViewerOptions {
+  /** Host metadata loader for automatic depth; retains host authentication/base paths. */
+  readonly loadDepth?: (context: SceneContext, signal: AbortSignal) => Promise<WorldInfo>;
+  /** Emitted only after an automatic transition has applied, including minY/maxY. */
+  readonly onDepthChange?: (context: SceneContext) => void;
+  readonly autoDepth?: boolean;
+  /** Minimum time between automatic slice requests, at least 1000 ms (default 2000). */
+  readonly autoDepthIntervalMs?: number;
   readonly regionBase?: string;
   readonly regionSuffix?: string;
   readonly caveViewDistance?: number;
@@ -66,6 +81,7 @@ export interface ViewerSnapshot {
   readonly context: SceneContext;
   readonly selection: HorizontalSelection | undefined;
   readonly discoveries: DiscoveryStats;
+  readonly navigation: DepthNavigation;
 }
 
 export interface Pointed {
@@ -104,6 +120,9 @@ export class WorldViewer {
   private readonly selections = new Map<string, HorizontalSelection>();
   private readonly discoveries: DiscoveryStreamer;
   private context: SceneContext;
+  private world: WorldInfo;
+  private readonly depthFollow: DepthFollow<WorldInfo>;
+  private readonly explorationRequests = new ExplorationRequests(2);
   private hour = 15.5;
   private readonly rig: CameraRig;
   private readonly timer = new Timer();
@@ -125,8 +144,23 @@ export class WorldViewer {
     options: WorldViewerOptions,
   ) {
     this.container = container;
+    this.world = world;
     this.context = sceneContext(world.dimension, world);
     this.options = options;
+    this.depthFollow = new DepthFollow(
+      options.loadDepth,
+      (next) => {
+        if (
+          (next.snapshotRevision ?? next.revision) !==
+          (this.world.snapshotRevision ?? this.world.revision)
+        )
+          throw new Error("The world snapshot changed; reopen the view before continuing");
+        this.applyWorld(next, true, true);
+        options.onDepthChange?.(this.context);
+      },
+      options.autoDepth,
+      options.autoDepthIntervalMs,
+    );
     this.atmosphere.setDimension(world.dimension);
     this.atmosphere.setCaves(this.context.mode === "caves");
     this.renderer = renderer;
@@ -163,6 +197,7 @@ export class WorldViewer {
     });
     this.rig.setVerticalWindow(this.context.mode === "caves" ? this.context : undefined);
     this.discoveries = new DiscoveryStreamer(container, {
+      explorationRequests: this.explorationRequests,
       ...(options.discoveryBase === undefined ? {} : { base: options.discoveryBase }),
       ...(options.discoverySuffix === undefined ? {} : { suffix: options.discoverySuffix }),
       ...(options.discoveryMemoryBudget === undefined
@@ -212,6 +247,11 @@ export class WorldViewer {
   ): Promise<WorldViewer> {
     if (options.selection) horizontalSelection(options.selection);
     if (
+      options.autoDepthIntervalMs !== undefined &&
+      (!Number.isFinite(options.autoDepthIntervalMs) || options.autoDepthIntervalMs < 1000)
+    )
+      throw new RangeError("Automatic depth interval must be at least 1000 ms");
+    if (
       options.discoveryMemoryBudget !== undefined &&
       (!Number.isFinite(options.discoveryMemoryBudget) || options.discoveryMemoryBudget < 32)
     )
@@ -254,6 +294,7 @@ export class WorldViewer {
       context: this.context,
       selection: this.selections.get(this.context.dimension),
       discoveries: this.discoveries.stats,
+      navigation: this.depthFollow.state,
     };
   }
 
@@ -273,22 +314,33 @@ export class WorldViewer {
 
   /** Replaces all terrain together while retaining the renderer, materials and controls. */
   setWorld(world: WorldInfo, keepView = false): void {
+    this.depthFollow.cancel();
+    this.applyWorld(world, keepView);
+  }
+
+  private applyWorld(world: WorldInfo, keepView: boolean, followDepth = false): void {
+    // Validate before releasing the current terrain.
+    const context = sceneContext(world.dimension, world);
     const previous = this.snapshot().view;
     this.scene.remove(this.streamer.root);
     this.streamer.dispose();
-    this.context = sceneContext(world.dimension, world);
+    this.world = world;
+    this.context = context;
     this.discoveries.setWorld(world);
     this.streamer = this.createStreamer(world);
     this.scene.add(this.streamer.root);
     this.atmosphere.setDimension(world.dimension);
     this.atmosphere.setCaves(this.context.mode === "caves");
     this.setTimeOfDay(this.hour);
-    this.rig.setVerticalWindow(this.context.mode === "caves" ? this.context : undefined);
+    this.rig.setVerticalWindow(
+      this.context.mode === "caves" ? this.context : undefined,
+      followDepth,
+    );
     this.rig.setView(
       {
         ...previous,
         ...(keepView ? {} : { ...world.spawn, distance: world.dimension === "nether" ? 80 : 160 }),
-        ...(this.context.mode === "caves"
+        ...(this.context.mode === "caves" && !followDepth
           ? {
               y: (this.context.minY + this.context.maxY) / 2,
               distance: Math.min(previous.distance, 80),
@@ -312,6 +364,7 @@ export class WorldViewer {
         ? {}
         : { regionSuffix: this.options.regionSuffix }),
       meshPool: this.meshPool,
+      ...(caves ? { explorationRequests: this.explorationRequests } : {}),
       materials: this.materials,
       voxelPixels: 2.2,
       blockPixels: 4.4,
@@ -346,6 +399,35 @@ export class WorldViewer {
   /** Lets the camera zoom out far past the usual limit, with the view growing to match. */
   setZoomUnlocked(unlocked: boolean): void {
     this.rig.setZoomUnlocked(unlocked);
+  }
+
+  /** Page Up/Down and held mobile controls share the same bounded vertical movement. */
+  setVerticalMovement(direction: VerticalMovement): void {
+    this.rig.setVerticalMovement(direction);
+  }
+
+  setAutoDepth(enabled: boolean): void {
+    this.depthFollow.setEnabled(enabled);
+  }
+
+  /** Return above the current cut, retaining X/Z, discoveries and selection. */
+  recoverCamera(): void {
+    if (this.context.mode !== "caves") return;
+    this.depthFollow.cancel();
+    this.rig.stopMovement();
+    this.setSelectionTool("off");
+    this.rig.setEnabled(true);
+    this.rig.setView(
+      {
+        ...this.snapshot().view,
+        y: (this.context.minY + this.context.maxY) / 2,
+        distance: 80,
+        pitch: MathUtils.degToRad(60),
+      },
+      { settle: false },
+    );
+    this.fitViewDistance();
+    this.regionsChanged = true;
   }
 
   flyTo(x: number, z: number): void {
@@ -398,12 +480,14 @@ export class WorldViewer {
   }
 
   dispose(): void {
+    this.depthFollow.cancel();
     this.renderer.setAnimationLoop(null);
     this.resizeObserver.disconnect();
     this.rig.dispose();
     this.selectionBox.dispose();
     this.discoveries.dispose();
     this.streamer.dispose();
+    this.explorationRequests.dispose();
     this.meshPool.dispose();
     this.pipeline.dispose();
     for (const pair of Object.values(this.materials)) {
@@ -426,6 +510,13 @@ export class WorldViewer {
     }
     if (this.streamer.animate(performance.now())) this.regionsChanged = true;
     const terrain = this.streamer.stats;
+    this.depthFollow.update(
+      this.context,
+      this.rig.focus.y,
+      this.rig.verticalMovement,
+      terrain.loading === 0 && terrain.remaining === 0,
+      performance.now(),
+    );
     this.discoveries.update(
       this.camera,
       this.rig.focus,

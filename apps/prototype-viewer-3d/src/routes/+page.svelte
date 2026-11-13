@@ -18,6 +18,7 @@
   import StatusCard from "$lib/components/StatusCard.svelte";
   import TimeOfDay from "$lib/components/TimeOfDay.svelte";
   import ViewControls from "$lib/components/ViewControls.svelte";
+  import CaveNavigation from "$lib/components/CaveNavigation.svelte";
   import SelectionControls from "$lib/components/SelectionControls.svelte";
   import DiscoveryControls from "$lib/components/DiscoveryControls.svelte";
   import {
@@ -53,6 +54,7 @@
   let selectedArea = $state.raw<HorizontalSelection>();
   let selectionTool = $state<SelectionTool>("off");
   let discoveryPrefs = $state.raw<DiscoveryFilters>(DEFAULT_DISCOVERY_FILTERS);
+  let autoDepth = $state(true);
   const surfaceCeilings = new Map<Dimension, number>();
   let switching = $state(false);
   let loadContext: ((context: SceneContext) => Promise<void>) | undefined;
@@ -74,6 +76,15 @@
   });
   $effect(() => {
     viewer?.setSelectionTool(selectionTool);
+  });
+  $effect(() => {
+    if (!viewer) return;
+    viewer.setAutoDepth(autoDepth);
+    try {
+      localStorage.setItem("mapelix-auto-depth-v1", autoDepth ? "1" : "0");
+    } catch {
+      /* Browser storage is optional. */
+    }
   });
   $effect(() => {
     if (!viewer) return;
@@ -104,6 +115,15 @@
     if (start.context.mode === "caves") sliceThickness = start.context.maxY - start.context.minY;
     hour = start.hour ?? DEFAULT_HOUR;
     selectedArea = start.selection;
+    let initialAutoDepth = start.autoDepth;
+    if (initialAutoDepth === undefined) {
+      try {
+        initialAutoDepth = localStorage.getItem("mapelix-auto-depth-v1") !== "0";
+      } catch {
+        initialAutoDepth = true;
+      }
+    }
+    autoDepth = initialAutoDepth;
     let initialDiscoveries = start.discoveries;
     if (!initialDiscoveries) {
       try {
@@ -122,6 +142,7 @@
       const current = ++generation;
       metadataRequest.abort();
       metadataRequest = new AbortController();
+      created?.setAutoDepth(false);
       switching = true;
       failure = undefined;
       try {
@@ -144,7 +165,10 @@
           updateContext(world);
         }
       } finally {
-        if (current === generation) switching = false;
+        if (current === generation) {
+          switching = false;
+          created?.setAutoDepth(autoDepth);
+        }
       }
     };
 
@@ -161,6 +185,12 @@
       created = await WorldViewer.create(element, info, start.view, {
         ...(start.selection ? { selection: start.selection } : {}),
         discoveryFilters: initialDiscoveries,
+        autoDepth: initialAutoDepth,
+        loadDepth: async (context, signal) => {
+          const response = await fetch(`/world.json?${contextSearch(context)}`, { signal });
+          if (!response.ok) throw new Error(`The depth could not be opened (${response.status})`);
+          return (await response.json()) as WorldInfo;
+        },
         onDiscoverySelect: (group) => {
           void exploreDiscovery(group);
         },
@@ -180,15 +210,21 @@
       polling = setInterval(() => {
         snapshot = created?.snapshot();
         if (snapshot === undefined) return;
+        if (!switching && world && contextKey(world) !== contextKey(snapshot.context)) {
+          world = { ...world, ...snapshot.context };
+          updateContext(world);
+          pointed = undefined;
+        }
         const key = JSON.stringify([
           snapshot.view,
           hour,
           world && contextKey(world),
           snapshot.selection,
           discoveryPrefs,
+          autoDepth,
         ]);
         if (key !== lastUrl && world)
-          writeViewToUrl(snapshot.view, hour, world, snapshot.selection, discoveryPrefs);
+          writeViewToUrl(snapshot.view, hour, world, snapshot.selection, discoveryPrefs, autoDepth);
         lastUrl = key;
       }, 250);
     })().catch((cause: unknown) => {
@@ -306,7 +342,7 @@
     role="application"
   ></div>
 
-  <div class="overlay">
+  <div class="overlay" class:caves={mode === "caves"}>
     <div class="top-left">
       <StatusCard name={world?.name} loading={snapshot?.streaming.remaining ?? 0} {failure} />
       {#if mode === "caves" && snapshot && snapshot.streaming.cached > 0 && snapshot.streaming.remaining === 0 && snapshot.streaming.quads === 0}
@@ -427,6 +463,20 @@
     </div>
 
     <div class="bottom-right">
+      {#if mode === "caves" && viewer && snapshot}
+        <CaveNavigation
+          navigation={snapshot.navigation}
+          {autoDepth}
+          onauto={(enabled) => {
+            autoDepth = enabled;
+          }}
+          onmove={(direction) => viewer?.setVerticalMovement(direction)}
+          onrecover={() => {
+            selectionTool = "off";
+            viewer?.recoverCamera();
+          }}
+        />
+      {/if}
       <ViewControls
         heading={snapshot?.view.heading ?? 0}
         onnorth={() => viewer?.faceNorth()}
@@ -566,6 +616,26 @@
 
     .bottom-center {
       grid-area: 5 / 1 / 6 / 3;
+    }
+
+    .overlay.caves {
+      grid-template-rows: auto auto 1fr auto auto auto;
+    }
+
+    .caves .bottom-right {
+      grid-area: 4 / 1 / 5 / 3;
+      flex-direction: row;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      align-items: flex-end;
+    }
+
+    .caves .bottom-left {
+      grid-area: 5 / 1 / 6 / 3;
+    }
+
+    .caves .bottom-center {
+      grid-area: 6 / 1 / 7 / 3;
     }
 
     .hint {

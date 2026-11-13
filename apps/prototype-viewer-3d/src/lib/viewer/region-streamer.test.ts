@@ -63,6 +63,27 @@ afterEach(() => {
 });
 
 describe("dimension streaming lifecycle", () => {
+  it("pauses scheduling after a 429 instead of retrying every frame", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(null, {
+        status: 429,
+        headers: { "retry-after": "60" },
+      }),
+    );
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", fetcher);
+    const streamer = stream("overworld");
+    try {
+      request(streamer);
+      await vi.waitFor(() => expect(warning).toHaveBeenCalledTimes(1));
+      for (let i = 0; i < 120; i++) request(streamer);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(streamer.stats.remaining).toBeGreaterThan(0);
+    } finally {
+      streamer.dispose();
+      warning.mockRestore();
+    }
+  });
   it("uses canonical negative bounds, near LODs and an embedded base/suffix for caves", () => {
     const fetcher = vi.fn<typeof fetch>(() => new Promise<Response>(() => {}));
     vi.stubGlobal("fetch", fetcher);

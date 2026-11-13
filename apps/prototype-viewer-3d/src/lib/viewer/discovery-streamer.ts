@@ -15,11 +15,13 @@ import {
   type DiscoveryTile,
 } from "@mapelix/scene-prototype/discoveries";
 import type { WorldInfo } from "./world-viewer";
+import { ExplorationRequests, ExplorationRequestError } from "./exploration-requests";
 
 export interface DiscoveryOptions {
   readonly base?: string;
   readonly suffix?: string;
   readonly memoryBudget?: number;
+  readonly explorationRequests?: ExplorationRequests;
   readonly onselect: (group: DiscoveryGroup) => void;
 }
 export interface DiscoveryStats extends DiscoveryQuery {
@@ -50,6 +52,7 @@ export class DiscoveryStreamer {
   private readonly markers = new Map<string, Marker>();
   private readonly point = new Vector3();
   private readonly budget: number;
+  private readonly requests: ExplorationRequests;
   private bytes = 0;
   private largestTile = 32;
   private context: SceneContext = sceneContext();
@@ -63,6 +66,7 @@ export class DiscoveryStreamer {
   private disposed = false;
   private constrained = false;
   private error: string | undefined;
+  private transientError = false;
   private query: DiscoveryQuery = { groups: [], matchingBlocks: 0, limited: false };
   private grouping: Generator<void, DiscoveryQuery> | undefined;
   private get active(): boolean {
@@ -80,6 +84,8 @@ export class DiscoveryStreamer {
     private readonly options: DiscoveryOptions,
   ) {
     this.budget = options.memoryBudget ?? DISCOVERY_LIMITS.memoryBudget;
+    this.requests =
+      options.explorationRequests ?? new ExplorationRequests(DISCOVERY_LIMITS.maxRequests);
     if (!Number.isFinite(this.budget) || this.budget < 32)
       throw new RangeError("Discovery memory budget must be at least 32 bytes");
     this.layer.setAttribute("aria-label", "Discovery markers");
@@ -104,6 +110,7 @@ export class DiscoveryStreamer {
       this.bytes = 0;
       this.largestTile = 32;
       this.error = undefined;
+      this.transientError = false;
     }
     this.context = sceneContext(world.dimension, world);
     this.revision = revision;
@@ -123,6 +130,7 @@ export class DiscoveryStreamer {
     this.wantedKey = "";
     this.failed.clear();
     this.error = undefined;
+    this.transientError = false;
     if (!this.active) {
       this.cancel();
       this.clearMarkers();
@@ -270,15 +278,9 @@ export class DiscoveryStreamer {
     });
     const url = `${this.options.base ?? "/discoveries"}/${tile.x}/${tile.z}${this.options.suffix ?? ".bin"}?${params}`;
     const dimension = this.context.dimension;
-    void fetch(url, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok)
-          throw new Error(
-            response.status === 409
-              ? "Snapshot changed. Reload the map."
-              : `Discoveries unavailable (${response.status}). Toggle discoveries to retry.`,
-          );
-        const raw = await response.arrayBuffer();
+    void this.requests
+      .read(url, controller.signal)
+      .then((raw) => {
         if (controller.signal.aborted || this.disposed) return;
         if (raw.byteLength > this.budget)
           throw new Error("Discovery tile exceeds the selected memory budget.");
@@ -298,10 +300,28 @@ export class DiscoveryStreamer {
           this.cache.delete(oldest);
         }
         this.dirty = true;
+        if (this.transientError) {
+          this.error = undefined;
+          this.transientError = false;
+        }
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted || this.disposed) return;
-        this.error = cause instanceof Error ? cause.message : String(cause);
+        this.transientError =
+          cause instanceof ExplorationRequestError &&
+          (cause.status === 429 || cause.status === 503);
+        if (this.transientError) {
+          this.error = "Server busy. Waiting before retrying discoveries.";
+          return;
+        }
+        this.error =
+          cause instanceof ExplorationRequestError
+            ? cause.status === 409
+              ? "Snapshot changed. Reload the map."
+              : `Discoveries unavailable (${cause.status}). Toggle discoveries to retry.`
+            : cause instanceof Error
+              ? cause.message
+              : String(cause);
         this.failed.add(tile.key);
         while (this.failed.size > 64) this.failed.delete(this.failed.values().next().value!);
       })
@@ -374,6 +394,7 @@ export class DiscoveryStreamer {
   dispose(): void {
     this.disposed = true;
     this.cancel();
+    if (!this.options.explorationRequests) this.requests.dispose();
     this.clearMarkers();
     this.layer.remove();
     this.cache.clear();
