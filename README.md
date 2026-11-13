@@ -143,8 +143,9 @@ Nether roof cut that preserves interior geometry through every LOD. See the
 
 The local 3D viewer also offers 16/32-block **Caves** slices, including enclosed
 negative-Y caverns. See [underground rendering](docs/underground-rendering.md) for
-the limits, memory lifecycle and integration contract. Resource discovery remains
-a later milestone.
+the limits, memory lifecycle and integration contract. The subsequent
+[exploration milestones](docs/underground-exploration.md) add a selectable 3D
+volume and independent discovery markers, including fully buried ores.
 
 ## More information
 

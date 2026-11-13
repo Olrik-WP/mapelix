@@ -6,6 +6,8 @@ interface Sample {
   memory: { uniformBuffers: number; textures: number; total: number };
   pooled: number;
   heap?: number;
+  discoveryBytes: number;
+  markers: number;
 }
 declare global {
   interface Window {
@@ -57,7 +59,7 @@ test("104 real view switches retain bounded GPU/CPU resources and release the re
     sample.heap = heap.usedSize;
     samples.push(sample);
   });
-  await page.evaluate(async (worlds) => {
+  const backend = await page.evaluate(async (worlds) => {
     const modulePath = "/src/lib/viewer/world-viewer.ts";
     const { WorldViewer } = await import(modulePath);
     const viewer: WorldViewer = await WorldViewer.create(
@@ -78,10 +80,33 @@ test("104 real view switches retain bounded GPU/CPU resources and release the re
       );
       viewer.zoom(0.5);
       viewer.setRenderDistance(128);
+      const caves = world.mode === "caves";
+      viewer.setSelection(caves ? { minX: 0, maxX: 32, minZ: 0, maxZ: 32 } : undefined);
+      viewer.setSelectionTool(
+        caves ? (Math.floor(index / 4) % 2 === 0 ? "move" : "resize") : "off",
+      );
+      viewer.setDiscoveryFilters({
+        enabled: caves,
+        categories: ["spawners", "containers", "vaults", "amethyst", "sculk", "landmarks"],
+        ores: [],
+        exposure: "all",
+        allHeights: false,
+      });
       const start = performance.now();
       while (true) {
         const stats = viewer.snapshot().streaming;
-        if (!stats.loading && !stats.remaining && stats.quads) break;
+        const discoveries = viewer.snapshot().discoveries;
+        if (
+          !stats.loading &&
+          !stats.remaining &&
+          stats.quads &&
+          (!caves ||
+            (!discoveries.loading &&
+              !discoveries.remaining &&
+              !discoveries.grouping &&
+              discoveries.groups.length > 0))
+        )
+          break;
         if (performance.now() - start > 25_000)
           throw new Error(`Terrain timeout at switch ${index}`);
         await pause(25);
@@ -94,16 +119,20 @@ test("104 real view switches retain bounded GPU/CPU resources and release the re
           index,
           memory: { ...renderer.info.memory },
           pooled: pool.retained,
+          discoveryBytes: viewer.snapshot().discoveries.bytes,
+          markers: document.querySelectorAll('[aria-label="Discovery markers"] button').length,
         });
       }
     }
+    const backend = viewer.backend;
     viewer.dispose();
     window.__undergroundViewer = undefined;
+    return backend;
   }, worlds);
   expect(samples).toHaveLength(26);
   await testInfo.attach("underground-lifecycle", {
     body: JSON.stringify(
-      { backend: testInfo.project.name, switches: 104, samples, errors },
+      { backend, project: testInfo.project.name, switches: 104, samples, errors },
       null,
       2,
     ),
@@ -121,4 +150,8 @@ test("104 real view switches retain bounded GPU/CPU resources and release the re
   expect(last.pooled).toBeLessThanOrEqual(5 * 64);
   expect(errors).toEqual([]);
   await expect(page.locator("canvas")).toHaveCount(0);
+  await expect(page.locator('[aria-label="Discovery markers"]')).toHaveCount(0);
+  expect(
+    samples.every((sample) => sample.discoveryBytes <= 4 * 1024 * 1024 && sample.markers <= 128),
+  ).toBe(true);
 });

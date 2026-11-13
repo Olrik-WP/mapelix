@@ -78,13 +78,13 @@ export interface SceneMaterials {
   readonly glass: MaterialPair;
 }
 
-export function createSceneMaterials(atmosphere: Atmosphere): SceneMaterials {
+export function createSceneMaterials(atmosphere: Atmosphere, clip?: Node<"bool">): SceneMaterials {
   return {
-    terrain: withFading(createTerrainMaterial(atmosphere)),
-    lava: withFading(createLavaMaterial(atmosphere)),
-    plants: withFading(createPlantMaterial(atmosphere), plantMask()),
-    water: withFading(createWaterMaterial(atmosphere)),
-    glass: withFading(createGlassMaterial(atmosphere)),
+    terrain: withFading(createTerrainMaterial(atmosphere), clip),
+    lava: withFading(createLavaMaterial(atmosphere), clip),
+    plants: withFading(createPlantMaterial(atmosphere), clip ? plantMask().and(clip) : plantMask()),
+    water: withFading(createWaterMaterial(atmosphere), clip),
+    glass: withFading(createGlassMaterial(atmosphere), clip),
   };
 }
 

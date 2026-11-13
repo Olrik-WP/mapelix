@@ -15,6 +15,10 @@ import { bloom } from "three/addons/tsl/display/BloomNode.js";
 import { normalWorldGeometry, pass } from "three/tsl";
 import { retainScreenUniforms } from "./shaders/stable-screen";
 import { createStablePCFFilter } from "./shaders/shadow-filter";
+import { SelectionBox, type SelectionTool, type SelectionChange } from "./selection-box";
+import { horizontalSelection, type HorizontalSelection } from "@mapelix/scene-prototype/selection";
+import { DiscoveryStreamer, type DiscoveryStats } from "./discovery-streamer";
+import type { DiscoveryFilters, DiscoveryGroup } from "@mapelix/scene-prototype/discoveries";
 
 import { Atmosphere } from "./atmosphere";
 import { CameraRig, ZOOM_LIMIT, pointerRay, type CameraView } from "./camera-rig";
@@ -33,6 +37,8 @@ export interface WorldInfo extends SceneContextInput {
   readonly name: string;
   readonly spawn: { readonly x: number; readonly y: number; readonly z: number };
   readonly revision: string;
+  readonly snapshotRevision?: string;
+  readonly discoveries?: { readonly schemaVersion: number; readonly tileSpan: number };
 }
 
 export type { CameraView } from "./camera-rig";
@@ -43,6 +49,13 @@ export interface WorldViewerOptions {
   readonly regionSuffix?: string;
   readonly caveViewDistance?: number;
   readonly caveMemoryBudget?: number;
+  readonly selection?: HorizontalSelection;
+  readonly onSelectionChange?: (change: SelectionChange) => void;
+  readonly discoveryBase?: string;
+  readonly discoverySuffix?: string;
+  readonly discoveryMemoryBudget?: number;
+  readonly discoveryFilters?: DiscoveryFilters;
+  readonly onDiscoverySelect?: (discovery: DiscoveryGroup) => void;
 }
 
 export interface ViewerSnapshot {
@@ -51,6 +64,8 @@ export interface ViewerSnapshot {
   readonly view: CameraView;
   readonly streaming: StreamingStats;
   readonly context: SceneContext;
+  readonly selection: HorizontalSelection | undefined;
+  readonly discoveries: DiscoveryStats;
 }
 
 export interface Pointed {
@@ -85,6 +100,9 @@ export class WorldViewer {
   private readonly materials: SceneMaterials;
   private readonly meshPool = new RegionMeshPool();
   private readonly options: WorldViewerOptions;
+  private readonly selectionBox: SelectionBox;
+  private readonly selections = new Map<string, HorizontalSelection>();
+  private readonly discoveries: DiscoveryStreamer;
   private context: SceneContext;
   private hour = 15.5;
   private readonly rig: CameraRig;
@@ -115,9 +133,19 @@ export class WorldViewer {
     container.append(renderer.domElement);
 
     retainScreenUniforms();
-    this.materials = createSceneMaterials(this.atmosphere);
+    this.selectionBox = new SelectionBox(
+      this.camera,
+      renderer.domElement,
+      this.context,
+      (change) => {
+        this.setSelection(change.selection);
+        this.options.onSelectionChange?.(change);
+      },
+      (dragging) => this.rig?.setEnabled(!dragging),
+    );
+    this.materials = createSceneMaterials(this.atmosphere, this.selectionBox.mask);
     this.streamer = this.createStreamer(world);
-    this.scene.add(this.streamer.root, this.sky, this.sun, this.sun.target);
+    this.scene.add(this.streamer.root, this.sky, this.sun, this.sun.target, this.selectionBox.root);
     this.scene.backgroundNode = this.atmosphere.sky(normalWorldGeometry);
     this.scene.fogNode = this.atmosphere.fogNode;
 
@@ -134,6 +162,17 @@ export class WorldViewer {
         this.streamer.raycast(origin, direction, far, radius),
     });
     this.rig.setVerticalWindow(this.context.mode === "caves" ? this.context : undefined);
+    this.discoveries = new DiscoveryStreamer(container, {
+      ...(options.discoveryBase === undefined ? {} : { base: options.discoveryBase }),
+      ...(options.discoverySuffix === undefined ? {} : { suffix: options.discoverySuffix }),
+      ...(options.discoveryMemoryBudget === undefined
+        ? {}
+        : { memoryBudget: options.discoveryMemoryBudget }),
+      onselect: (group) =>
+        options.onDiscoverySelect ? options.onDiscoverySelect(group) : this.focusOn(group),
+    });
+    this.discoveries.setWorld(world);
+    if (options.discoveryFilters) this.discoveries.setFilters(options.discoveryFilters);
     this.rig.setView(
       {
         x: world.spawn.x,
@@ -149,6 +188,7 @@ export class WorldViewer {
       },
       { settle: this.context.mode !== "caves" && start.y === undefined },
     );
+    this.setSelection(options.selection);
 
     // Only very bright light blooms: the sun, glints on water, and lamps after dark.
     const color = pass(this.scene, this.camera, { samples: 4 }).getTextureNode("output");
@@ -170,6 +210,12 @@ export class WorldViewer {
     start: Partial<CameraView> = {},
     options: WorldViewerOptions = {},
   ): Promise<WorldViewer> {
+    if (options.selection) horizontalSelection(options.selection);
+    if (
+      options.discoveryMemoryBudget !== undefined &&
+      (!Number.isFinite(options.discoveryMemoryBudget) || options.discoveryMemoryBudget < 32)
+    )
+      throw new RangeError("Discovery memory budget must be at least 32 bytes");
     for (const value of [options.caveViewDistance, options.caveMemoryBudget]) {
       if (value !== undefined && (!Number.isFinite(value) || value <= 0))
         throw new RangeError("Cave budgets must be positive");
@@ -206,6 +252,8 @@ export class WorldViewer {
       },
       streaming: this.streamer.stats,
       context: this.context,
+      selection: this.selections.get(this.context.dimension),
+      discoveries: this.discoveries.stats,
     };
   }
 
@@ -229,6 +277,7 @@ export class WorldViewer {
     this.scene.remove(this.streamer.root);
     this.streamer.dispose();
     this.context = sceneContext(world.dimension, world);
+    this.discoveries.setWorld(world);
     this.streamer = this.createStreamer(world);
     this.scene.add(this.streamer.root);
     this.atmosphere.setDimension(world.dimension);
@@ -248,6 +297,7 @@ export class WorldViewer {
       },
       { settle: this.context.mode !== "caves" },
     );
+    this.setSelection(this.selections.get(this.context.dimension));
     this.regionsChanged = true;
     this.fitViewDistance();
   }
@@ -302,6 +352,32 @@ export class WorldViewer {
     this.rig.flyTo(x, z);
   }
 
+  /** Local view state only: no new terrain requests/cache variants for clip bounds. */
+  setSelection(input: HorizontalSelection | undefined): void {
+    const selection = input === undefined ? undefined : horizontalSelection(input);
+    if (selection) this.selections.set(this.context.dimension, selection);
+    else this.selections.delete(this.context.dimension);
+    this.selectionBox.set(selection, this.context);
+    this.streamer.setSelection(this.context.mode === "caves" ? selection : undefined);
+    this.discoveries.setSelection(this.context.mode === "caves" ? selection : undefined);
+    this.regionsChanged = true;
+  }
+
+  setSelectionTool(tool: SelectionTool): void {
+    this.selectionBox.setTool(tool);
+  }
+
+  setDiscoveryFilters(filters: DiscoveryFilters): void {
+    this.discoveries.setFilters(filters);
+  }
+
+  /** Focus a known block without settling onto the surface above it. */
+  focusOn(point: Pointed): void {
+    this.rig.setView({ ...this.snapshot().view, ...point }, { settle: false });
+    this.fitViewDistance();
+    this.regionsChanged = true;
+  }
+
   zoom(factor: number): void {
     this.rig.zoom(factor);
   }
@@ -325,6 +401,8 @@ export class WorldViewer {
     this.renderer.setAnimationLoop(null);
     this.resizeObserver.disconnect();
     this.rig.dispose();
+    this.selectionBox.dispose();
+    this.discoveries.dispose();
     this.streamer.dispose();
     this.meshPool.dispose();
     this.pipeline.dispose();
@@ -347,6 +425,13 @@ export class WorldViewer {
       this.streamer.update(this.camera, this.renderer.domElement.height);
     }
     if (this.streamer.animate(performance.now())) this.regionsChanged = true;
+    const terrain = this.streamer.stats;
+    this.discoveries.update(
+      this.camera,
+      this.rig.focus,
+      terrain.loading === 0 && terrain.remaining === 0,
+      this.renderer.domElement,
+    );
     this.updateShadow();
     this.regionsChanged = false;
     this.pipeline.render();

@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { openSceneWorld, type RegionRequest, type SceneWorld } from "@mapelix/scene-prototype";
 import { REGION_FORMAT_VERSION } from "@mapelix/scene-prototype/format";
+import { DISCOVERY_LIMITS } from "@mapelix/scene-prototype/discoveries";
 import {
   DIMENSIONS,
   CAVE_LIMITS,
@@ -42,10 +43,12 @@ export interface WorldMetadata extends SceneContext {
   /** Changes whenever the world files or the mesh output change. */
   readonly revision: string;
   readonly caves: typeof CAVE_LIMITS;
+  readonly snapshotRevision: string;
+  readonly discoveries: typeof DISCOVERY_LIMITS;
 }
 
 const worlds = new Map<Dimension, Promise<SceneWorld>>();
-let revisionPromise: Promise<string> | undefined;
+let fingerprintPromise: Promise<{ terrain: string; snapshot: string }> | undefined;
 const memory = new Map<string, Promise<LoadedRegion>>();
 // Local caves are memory-only: exploring depths cannot create unbounded disk variants.
 // Production disk quotas and revision cleanup belong to the scene-server adapter.
@@ -81,6 +84,8 @@ export async function getWorldMetadata(
     ...context,
     dimensions: Object.values(DIMENSIONS),
     caves: CAVE_LIMITS,
+    snapshotRevision: await getSnapshotRevision(),
+    discoveries: DISCOVERY_LIMITS,
   };
 }
 
@@ -174,15 +179,22 @@ async function readOrBuild(
   return { bytes: built.bytes, cacheStatus: "build", milliseconds: built.milliseconds };
 }
 
-function getRevision(): Promise<string> {
-  revisionPromise ??= fingerprintWorld();
-  return revisionPromise;
+async function getRevision(): Promise<string> {
+  fingerprintPromise ??= fingerprintWorld();
+  return (await fingerprintPromise).terrain;
+}
+
+export async function getSnapshotRevision(): Promise<string> {
+  fingerprintPromise ??= fingerprintWorld();
+  return (await fingerprintPromise).snapshot;
 }
 
 /** Hashes table names, sizes, and modification times. Reading the tables is not needed. */
-async function fingerprintWorld(): Promise<string> {
+async function fingerprintWorld(): Promise<{ terrain: string; snapshot: string }> {
   const hash = createHash("sha256");
+  const snapshot = createHash("sha256");
   hash.update(`scene-v${REGION_FORMAT_VERSION}-mesh-v${meshRevision}\0${worldDirectory}\0`);
+  snapshot.update(`snapshot-v1\0${worldDirectory}\0`);
   const database = join(worldDirectory, "db");
   const names = (await readdir(database))
     .filter((name) => /\.(?:ldb|sst|log)$/i.test(name))
@@ -190,8 +202,12 @@ async function fingerprintWorld(): Promise<string> {
   for (const name of names) {
     const details = await stat(join(database, name), { bigint: true });
     hash.update(`${name}\0${details.size}\0${details.mtimeNs}\n`);
+    snapshot.update(`${name}\0${details.size}\0${details.mtimeNs}\n`);
   }
-  return hash.digest("hex").slice(0, 20);
+  return {
+    terrain: hash.digest("hex").slice(0, 20),
+    snapshot: snapshot.digest("hex").slice(0, 20),
+  };
 }
 
 async function writeAtomically(path: string, bytes: Uint8Array): Promise<void> {

@@ -1,10 +1,11 @@
 import type { Dimension } from "../world/chunk-source.js";
 import type { RegionBuilderOptions, RegionRequest } from "./region-builder.js";
+import type { DiscoveryRequest } from "../discoveries.js";
 
-export interface WorkerRequest {
-  readonly id: number;
-  readonly region: RegionRequest;
-}
+export type WorkerPayload =
+  | { readonly region: RegionRequest }
+  | { readonly discoveries: DiscoveryRequest };
+export type WorkerRequest = WorkerPayload & { readonly id: number };
 
 export type WorkerReply =
   | {

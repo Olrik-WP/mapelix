@@ -77,6 +77,7 @@ export class CameraRig {
   private settling = false;
   private window: VerticalBounds | undefined;
   private zoomUnlocked = false;
+  private enabled = true;
 
   constructor(camera: PerspectiveCamera, element: HTMLElement, terrain: Terrain) {
     this.camera = camera;
@@ -197,6 +198,7 @@ export class CameraRig {
 
   /** Advances input and flights. Returns whether the camera moved this frame. */
   update(delta: number): boolean {
+    if (!this.enabled) return false;
     this.fly(delta);
     this.applyKeys(delta);
     this.controls.update(delta);
@@ -226,6 +228,13 @@ export class CameraRig {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("blur", this.onBlur);
+  }
+
+  /** Suspend orbit/keyboard input while a selection handle owns the pointer. */
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    this.controls.enabled = enabled;
+    if (!enabled) this.keys.clear();
   }
 
   /** Hands the camera to the user: stops any jump and puts the orbit point on what they see. */
@@ -351,6 +360,7 @@ export class CameraRig {
   }
 
   private readonly onWheel = (event: WheelEvent): void => {
+    if (!this.enabled) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     this.takeOver();
@@ -362,7 +372,14 @@ export class CameraRig {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (event.target instanceof HTMLInputElement || !MOVE_KEYS.has(event.code)) return;
+    if (
+      !this.enabled ||
+      event.target instanceof HTMLInputElement ||
+      event.target instanceof HTMLSelectElement ||
+      event.target instanceof HTMLTextAreaElement ||
+      !MOVE_KEYS.has(event.code)
+    )
+      return;
     if (!this.keys.has(event.code)) this.takeOver();
     this.keys.add(event.code);
   };

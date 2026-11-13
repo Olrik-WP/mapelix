@@ -1,5 +1,8 @@
 # Underground exploration: Milestone 1
 
+This records the original Milestone 1 delivery. Subsequent selection and
+discovery work is documented in [Milestones 2–4](underground-exploration.md).
+
 Generic engine and local viewer implementation based on `e02cf7c`, isolated on
 `feature/underground-rendering`. This delivery includes the implementation,
 regression tests and archived Milestone 0 measurements. Production integration,

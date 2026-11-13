@@ -8,6 +8,8 @@ import { meshRegionVolume } from "../mesh/voxel-mesher.js";
 import { buildVoxelRegion } from "../mesh/voxel-region.js";
 import { ChunkSource, type Dimension } from "../world/chunk-source.js";
 import { CAVE_LIMITS, sceneContext, type SceneContextOptions } from "../dimensions.js";
+import { buildDiscoveryIndex } from "../world/discovery-index.js";
+import type { DiscoveryRequest } from "../discoveries.js";
 
 export interface RegionRequest extends SceneContextOptions {
   /** Exclusive upper mesh bound, in multiples of 16. Defaults to the dimension profile. */
@@ -40,6 +42,11 @@ export class RegionBuilder {
 
   build(request: RegionRequest): Uint8Array {
     return encodeSceneRegion(this.mesh(request));
+  }
+
+  /** Snapshot-based source indexing shares the worker/reader, independently of terrain meshing. */
+  discoveries(request: DiscoveryRequest): Uint8Array {
+    return buildDiscoveryIndex(this.chunks, request);
   }
 
   close(): void {

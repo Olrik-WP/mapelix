@@ -18,6 +18,16 @@
   import StatusCard from "$lib/components/StatusCard.svelte";
   import TimeOfDay from "$lib/components/TimeOfDay.svelte";
   import ViewControls from "$lib/components/ViewControls.svelte";
+  import SelectionControls from "$lib/components/SelectionControls.svelte";
+  import DiscoveryControls from "$lib/components/DiscoveryControls.svelte";
+  import {
+    DEFAULT_DISCOVERY_FILTERS,
+    discoveryFilters,
+    type DiscoveryFilters,
+    type DiscoveryGroup,
+  } from "@mapelix/scene-prototype/discoveries";
+  import { selectionAround, type HorizontalSelection } from "@mapelix/scene-prototype/selection";
+  import type { SelectionTool } from "$lib/viewer/selection-box";
   import { readViewFromUrl, writeViewToUrl } from "$lib/view-url";
   import type { Pointed, ViewerSnapshot, WorldInfo, WorldViewer } from "$lib/viewer/world-viewer";
 
@@ -40,6 +50,9 @@
   let mode = $state<ViewMode>("surface");
   let sliceMinY = $state(-64);
   let sliceThickness = $state(32);
+  let selectedArea = $state.raw<HorizontalSelection>();
+  let selectionTool = $state<SelectionTool>("off");
+  let discoveryPrefs = $state.raw<DiscoveryFilters>(DEFAULT_DISCOVERY_FILTERS);
   const surfaceCeilings = new Map<Dimension, number>();
   let switching = $state(false);
   let loadContext: ((context: SceneContext) => Promise<void>) | undefined;
@@ -58,6 +71,18 @@
 
   $effect(() => {
     viewer?.setZoomUnlocked(zoomUnlocked);
+  });
+  $effect(() => {
+    viewer?.setSelectionTool(selectionTool);
+  });
+  $effect(() => {
+    if (!viewer) return;
+    viewer.setDiscoveryFilters(discoveryPrefs);
+    try {
+      localStorage.setItem("mapelix-discoveries-v1", JSON.stringify(discoveryPrefs));
+    } catch {
+      /* Preferences are optional when browser storage is unavailable. */
+    }
   });
 
   const attachViewer: Attachment<HTMLDivElement> = (element) => {
@@ -78,6 +103,18 @@
     sliceMinY = start.context.minY;
     if (start.context.mode === "caves") sliceThickness = start.context.maxY - start.context.minY;
     hour = start.hour ?? DEFAULT_HOUR;
+    selectedArea = start.selection;
+    let initialDiscoveries = start.discoveries;
+    if (!initialDiscoveries) {
+      try {
+        const stored = localStorage.getItem("mapelix-discoveries-v1");
+        if (stored) initialDiscoveries = discoveryFilters(JSON.parse(stored));
+      } catch {
+        /* Ignore invalid saved preferences. */
+      }
+    }
+    initialDiscoveries ??= DEFAULT_DISCOVERY_FILTERS;
+    discoveryPrefs = initialDiscoveries;
     let metadataRequest = new AbortController();
     let generation = 0;
 
@@ -95,6 +132,7 @@
         const info: WorldInfo = await response.json();
         if (disposed || current !== generation) return;
         created?.setWorld(info, world?.dimension === info.dimension);
+        selectedArea = created?.snapshot().selection;
         world = info;
         updateContext(info);
         pointed = undefined;
@@ -120,7 +158,20 @@
       if (disposed) return;
       world = info;
       updateContext(info);
-      created = await WorldViewer.create(element, info, start.view);
+      created = await WorldViewer.create(element, info, start.view, {
+        ...(start.selection ? { selection: start.selection } : {}),
+        discoveryFilters: initialDiscoveries,
+        onDiscoverySelect: (group) => {
+          void exploreDiscovery(group);
+        },
+        onSelectionChange: (change) => {
+          selectedArea = change.selection;
+          if (change.minY !== sliceMinY) {
+            sliceMinY = change.minY;
+            changeSlice();
+          }
+        },
+      });
       if (disposed) {
         created.dispose();
         return;
@@ -129,8 +180,15 @@
       polling = setInterval(() => {
         snapshot = created?.snapshot();
         if (snapshot === undefined) return;
-        const key = JSON.stringify([snapshot.view, hour, world && contextKey(world)]);
-        if (key !== lastUrl && world) writeViewToUrl(snapshot.view, hour, world);
+        const key = JSON.stringify([
+          snapshot.view,
+          hour,
+          world && contextKey(world),
+          snapshot.selection,
+          discoveryPrefs,
+        ]);
+        if (key !== lastUrl && world)
+          writeViewToUrl(snapshot.view, hour, world, snapshot.selection, discoveryPrefs);
         lastUrl = key;
       }, 250);
     })().catch((cause: unknown) => {
@@ -208,6 +266,28 @@
     void loadContext?.(
       sceneContext(dimension, { mode: "caves", minY: sliceMinY, maxY: sliceMinY + sliceThickness }),
     );
+  }
+
+  function applyArea(area: HorizontalSelection | undefined): void {
+    selectedArea = area;
+    viewer?.setSelection(area);
+  }
+
+  async function exploreDiscovery(group: DiscoveryGroup): Promise<void> {
+    if (!viewer || group.dimension !== dimension) return;
+    const current = viewer.snapshot().context;
+    if (current.mode !== "caves" || group.y < current.minY || group.y >= current.maxY) {
+      const config = DIMENSIONS[dimension];
+      const thickness = current.mode === "caves" ? current.maxY - current.minY : sliceThickness;
+      const minY = Math.max(
+        config.minY,
+        Math.min(config.maxY - thickness, Math.floor(group.y / 16) * 16),
+      );
+      await loadContext?.(sceneContext(dimension, { mode: "caves", minY, maxY: minY + thickness }));
+    }
+    const context = viewer?.snapshot().context;
+    if (context?.mode === "caves" && group.y >= context.minY && group.y < context.maxY)
+      viewer?.focusOn(group);
   }
 </script>
 
@@ -304,6 +384,32 @@
           />
         {/if}
       </div>
+      {#if mode === "caves" && viewer}
+        <SelectionControls
+          selection={selectedArea}
+          tool={selectionTool}
+          onselect={() => {
+            const v = viewer?.snapshot().view;
+            if (v) applyArea(selectionAround(v.x, v.z));
+          }}
+          onchange={applyArea}
+          ontool={(tool) => {
+            selectionTool = tool;
+          }}
+        />
+      {/if}
+      {#if viewer && snapshot}
+        <DiscoveryControls
+          filters={discoveryPrefs}
+          stats={snapshot.discoveries}
+          onchange={(prefs) => {
+            discoveryPrefs = prefs;
+          }}
+          onfocus={(group) => {
+            void exploreDiscovery(group);
+          }}
+        />
+      {/if}
       <JumpForm onjump={(x, z) => viewer?.flyTo(x, z)} onhome={returnToSpawn} />
     </div>
 
@@ -394,6 +500,8 @@
   .top-right {
     grid-area: 1 / 3;
     align-items: flex-end;
+    max-height: calc(100vh - 130px);
+    overflow-y: auto;
   }
 
   .bottom-left {

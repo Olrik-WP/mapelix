@@ -40,6 +40,13 @@ An unvisited dimension displays empty space until the copied world contains chun
   caverns. Choose 16/32 blocks and release the depth slider to rebuild. Cave streaming uses
   LOD 0/1, a maximum 128-block radius, fixed exploration lighting and bounded resources.
   A slice containing only solid rock can be empty; change depth or move to another area.
+- Open **Exploration area** to select the underground beneath a location. Set X/Z
+  bounds or drag the 3D Move/Resize handles. Moving Y commits a new slice when released.
+- Open **Discoveries** to enable nearby source indexing and markers. Filter by category,
+  ore type and exposure, including fully buried resources. **Search all heights** also
+  finds blocks outside the current slice. Clicking a marker/result opens its cave slice.
+  Filters persist in shared links and browser preferences. Search/display/cache limits
+  are bounded and shown when reached; no container contents are exposed.
 - Nether starts at the Overworld spawn divided by eight; End starts at X 100, Z 0. These
   are navigation entry points, not stored portal or player positions.
 - Drag to move. Right-drag to turn and tilt. Scroll to zoom toward the point under the cursor.
@@ -67,6 +74,12 @@ Cave links retain `mode=caves`, `minY` and exclusive `maxY`, for example
 The `ceilingY` alias remains accepted. See the
 [Milestone 1 notes](../../docs/underground-rendering.md) for the engine contract,
 memory lifecycle and responsibilities of production adapters.
+
+Selection and discovery interfaces, cache budgets and the API/embed 3 handoff are
+documented in [Milestones 2–4](../../docs/underground-exploration.md). Local discovery
+indexes use a separate 4 MiB memory cache (`MAPELIX_DISCOVERY_MEMORY_MIB`), with no
+disk writes. The terrain URL base and suffix remain configurable independently
+of `discoveryBase`/`discoverySuffix` in embedded consumers.
 
 ## Validation
 

@@ -57,6 +57,21 @@ from Surface keys. Adapters must also namespace by snapshot revision. Binary
 format remains 2. See [underground rendering](../../docs/underground-rendering.md)
 for resource ownership, limits and the future API/embed 3 integration handoff.
 
+## Source discoveries
+
+`world.buildDiscoveries({ x, z }, signal)` indexes a 32×32 source tile at all saved
+heights, using the same dimension worker budget at lower queue priority than
+terrain. Decode its bytes with `decodeDiscoveryTile` from the browser-safe
+`@mapelix/scene-prototype/discoveries` entry. Source indexes include fully buried
+ores and useful vanilla blocks; they contain no container inventories.
+
+Cache by snapshot revision, discovery schema/detector version, dimension and tile
+coordinates. Depth, selection, exposure and type filters are client queries over
+the same index. `queryDiscoverySteps` supports cooperative rendering; the
+synchronous `queryDiscoveries` wrapper is for offline consumers. See
+[Milestones 2–4](../../docs/underground-exploration.md) for limits and the adapter
+contract. The separate `./selection` entry contains browser-safe clip helpers.
+
 ## Regions
 
 Regions form a quadtree. A level 0 region covers 64 by 64 blocks, and each level up covers twice

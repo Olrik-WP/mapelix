@@ -19,6 +19,12 @@ import { regionEntry, type SurfaceHit } from "./quad-collider";
 import { RegionMesh, type RegionMeshPool } from "./region-mesh";
 import type { SceneMaterials } from "./shaders/materials";
 import {
+  selectionContains,
+  selectionIntersects,
+  selectedRayRange,
+  type HorizontalSelection,
+} from "@mapelix/scene-prototype/selection";
+import {
   DIMENSIONS,
   CAVE_LIMITS,
   contextSearch,
@@ -116,6 +122,7 @@ export class RegionStreamer {
   private disposed = false;
   private readonly context;
   private readonly maxLevel: number;
+  private selection: HorizontalSelection | undefined;
 
   constructor(options: StreamingOptions) {
     this.options = options;
@@ -128,6 +135,10 @@ export class RegionStreamer {
   /** Changes how far regions are requested, for example when the camera zooms out. */
   setViewDistance(distance: number): void {
     this.viewDistance = distance;
+  }
+
+  setSelection(selection: HorizontalSelection | undefined): void {
+    this.selection = selection;
   }
 
   get stats(): StreamingStats {
@@ -204,6 +215,14 @@ export class RegionStreamer {
 
   /** The nearest drawn surface along a ray, with `radius` blocks of room around the ray. */
   raycast(origin: Vector3, direction: Vector3, far: number, radius = 0): SurfaceHit | undefined {
+    let offset = 0;
+    if (this.selection) {
+      const range = selectedRayRange(this.selection, origin, direction, far);
+      if (!range) return undefined;
+      offset = range[0];
+      origin = origin.clone().addScaledVector(direction, offset);
+      far = range[1] - offset;
+    }
     const crossed: { readonly mesh: RegionMesh; readonly entry: number }[] = [];
     for (const mesh of this.drawn.values()) {
       const entry = regionEntry(mesh.region, origin, direction, far, radius);
@@ -217,11 +236,12 @@ export class RegionStreamer {
       if (entry >= reach) break;
       hit = mesh.collider.raycast(origin, direction, reach, radius) ?? hit;
     }
-    return hit;
+    return hit === undefined ? undefined : { ...hit, distance: hit.distance + offset };
   }
 
   /** Height of the highest block at a world column, from the finest region drawn there. */
   heightAt(x: number, z: number): number | undefined {
+    if (this.selection && !selectionContains(this.selection, x, z)) return undefined;
     for (let level = 0; level <= MAX_REGION_LEVEL; level += 1) {
       const span = regionSpan(level);
       const mesh = this.drawn.get(regionKey(level, Math.floor(x / span), Math.floor(z / span)));
@@ -253,6 +273,12 @@ export class RegionStreamer {
    * area is covered, either by the node itself or by all of its descendants.
    */
   private resolve(target: RegionNode, draw: RegionMesh[], wanted: Wanted[]): boolean {
+    const span = regionSpan(target.level);
+    if (
+      this.selection &&
+      !selectionIntersects(this.selection, target.x * span, target.z * span, span)
+    )
+      return true;
     const distance = this.distanceTo(target);
     if (distance > this.viewDistance) return true;
     const cached = this.cache.get(target.key);
@@ -279,6 +305,12 @@ export class RegionStreamer {
 
   /** Draws cached descendants of `target`, up to `depth` levels down, without new requests. */
   private coverWithCached(target: RegionNode, draw: RegionMesh[], depth: number): boolean {
+    const span = regionSpan(target.level);
+    if (
+      this.selection &&
+      !selectionIntersects(this.selection, target.x * span, target.z * span, span)
+    )
+      return true;
     if (depth === 0 || target.level === 0) return false;
     let covered = true;
     for (const child of children(target)) {
