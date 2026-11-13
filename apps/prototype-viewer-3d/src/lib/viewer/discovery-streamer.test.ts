@@ -89,6 +89,28 @@ afterEach(() => {
 });
 
 describe("discovery source reuse and lifecycle", () => {
+  it("does not restart grouping or requests when the host reapplies identical filters", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (url) => response(String(url)));
+    vi.stubGlobal("fetch", fetcher);
+    const { stream, tick } = setup();
+    stream.setSelection({ minX: 0, maxX: 32, minZ: 0, maxZ: 32 });
+    tick();
+    await flush();
+    tick();
+    expect(stream.stats.matchingBlocks).toBe(1);
+    expect(
+      stream.setFilters({
+        ...DEFAULT_DISCOVERY_FILTERS,
+        enabled: true,
+        categories: ["ores"],
+        ores: ["diamond"],
+      }),
+    ).toBe(false);
+    tick();
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(stream.stats.matchingBlocks).toBe(1);
+    stream.dispose();
+  });
   it("automatically retries transient discovery errors after Retry-After", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const fetcher = vi

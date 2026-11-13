@@ -70,7 +70,8 @@ test("discovery filters find hidden ores, persist preferences and navigate witho
   await list.getByRole("button", { name: /Explore Diamond at 14, -63, 20/ }).click();
   await expect(page).toHaveURL(/x=14&y=-63&z=20/);
   await expect(page).toHaveURL(/minY=-64&maxY=-48/);
-  expect(new URL(page.url()).searchParams.get("distance")).toBe("45");
+  expect(Number(new URL(page.url()).searchParams.get("distance"))).toBeLessThanOrEqual(24);
+  await expect(page.locator("[data-discovery-details]")).toBeVisible();
   await expect(page.locator("canvas")).toHaveCount(1);
   expect(urls.every((url) => !new URL(url).searchParams.has("minY"))).toBe(true);
   await page.reload();

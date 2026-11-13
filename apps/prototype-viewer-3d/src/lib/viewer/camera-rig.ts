@@ -1,5 +1,5 @@
 import { MapControls } from "three/addons/controls/MapControls.js";
-import { MathUtils, Quaternion, Ray, Vector3, type PerspectiveCamera } from "three/webgpu";
+import { MathUtils, MOUSE, Quaternion, Ray, Vector3, type PerspectiveCamera } from "three/webgpu";
 
 import type { SurfaceHit } from "./quad-collider";
 import { CAVE_LIMITS, type VerticalBounds } from "@mapelix/scene-prototype/dimensions";
@@ -55,15 +55,17 @@ const MOVE_KEYS = new Set([
   ...["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF"],
   ...["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"],
 ]);
-const VERTICAL_KEYS = new Set(["PageUp", "PageDown"]);
+const VERTICAL_KEYS = new Set(["Space", "ShiftLeft", "ShiftRight", "PageUp", "PageDown"]);
+const SHIFT_KEYS = new Set(["ShiftLeft", "ShiftRight"]);
 export type VerticalMovement = -1 | 0 | 1;
+export type CameraInteraction = "pan" | "zoom" | "rotate" | "click";
 
 /**
  * Map-style camera: left drag pans, right drag orbits, and the wheel zooms toward the
  * surface under the cursor. Each drag, wheel step, or key press puts the orbit point on
  * the first surface in the middle of the view. The camera slides along surfaces it runs
  * into and climbs walls. Keyboard keys pan (WASD), turn (Q and E), and zoom (R and F).
- * Caves retain their pivot, allow passage through walls, and add Page Up/Down movement.
+ * Caves retain their pivot, allow passage through walls, and add Space/Shift movement.
  */
 export class CameraRig {
   private readonly camera: PerspectiveCamera;
@@ -82,8 +84,21 @@ export class CameraRig {
   private zoomUnlocked = false;
   private enabled = true;
   private heldVertical: VerticalMovement = 0;
+  private readonly pressed = new Set<string>();
+  private readonly pointers = new Set<number>();
+  private shiftBlocked = false;
+  private shiftSince = 0;
+  private gesture:
+    | { id: number; x: number; y: number; action: CameraInteraction; moved: boolean }
+    | undefined;
+  private pinned = false;
 
-  constructor(camera: PerspectiveCamera, element: HTMLElement, terrain: Terrain) {
+  constructor(
+    camera: PerspectiveCamera,
+    element: HTMLElement,
+    terrain: Terrain,
+    private readonly onInteraction?: (interaction: CameraInteraction) => void,
+  ) {
     this.camera = camera;
     this.element = element;
     this.terrain = terrain;
@@ -107,6 +122,11 @@ export class CameraRig {
     window.addEventListener("keyup", this.onKeyUp);
     window.addEventListener("blur", this.onBlur);
     document.addEventListener("visibilitychange", this.onVisibilityChange);
+    window.addEventListener("pointerdown", this.onPointerDown, true);
+    window.addEventListener("pointermove", this.onPointerMove, true);
+    window.addEventListener("pointerup", this.onPointerUp, true);
+    window.addEventListener("pointercancel", this.onPointerCancel, true);
+    window.addEventListener("focusin", this.onFocusIn);
   }
 
   get focus(): Vector3 {
@@ -131,14 +151,34 @@ export class CameraRig {
   get verticalMovement(): VerticalMovement {
     if (!this.enabled || !this.window) return 0;
     return Math.sign(
-      this.heldVertical + Number(this.keys.has("PageUp")) - Number(this.keys.has("PageDown")),
+      this.heldVertical +
+        Number(this.keys.has("Space") || this.keys.has("PageUp")) -
+        Number(
+          this.keys.has("PageDown") ||
+            (!this.shiftBlocked &&
+              performance.now() - this.shiftSince >= 180 &&
+              (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight"))),
+        ),
     ) as VerticalMovement;
   }
 
   /** Held touch/button input, stopped on release, blur, or a view change. */
   setVerticalMovement(direction: VerticalMovement): void {
     this.heldVertical = this.enabled && this.window ? direction : 0;
-    if (this.heldVertical) this.takeOver();
+    if (this.heldVertical) {
+      this.interact("pan");
+      this.takeOver();
+    }
+  }
+
+  /** Keep the selected point as the orbit pivot, including Surface views. */
+  setFocusPinned(pinned: boolean): void {
+    this.pinned = pinned;
+    this.controls.minDistance = pinned ? 1.5 : Math.min(6, Math.max(1.5, this.distance));
+    if (pinned) {
+      this.flight = undefined;
+      this.settling = false;
+    }
   }
 
   /**
@@ -166,7 +206,7 @@ export class CameraRig {
     const distance =
       this.window === undefined
         ? view.distance
-        : MathUtils.clamp(view.distance, 6, this.controls.maxDistance);
+        : MathUtils.clamp(view.distance, this.controls.minDistance, this.controls.maxDistance);
     this.camera.position.set(
       view.x + Math.sin(azimuth) * Math.cos(pitch) * distance,
       y + Math.sin(pitch) * distance,
@@ -212,11 +252,13 @@ export class CameraRig {
   }
 
   zoom(factor: number): void {
+    this.interact("zoom");
     this.takeOver();
     this.zoomAbout(this.controls.target, factor);
   }
 
   faceNorth(): void {
+    this.interact("rotate");
     this.takeOver();
     const offset = this.camera.position.clone().sub(this.controls.target);
     const horizontal = Math.hypot(offset.x, offset.z);
@@ -231,6 +273,7 @@ export class CameraRig {
     this.applyKeys(delta);
     const vertical = this.verticalMovement;
     if (vertical) {
+      this.interact("pan");
       const step = vertical * 12 * delta;
       this.controls.target.y += step;
       this.camera.position.y += step;
@@ -239,7 +282,7 @@ export class CameraRig {
     // Flights arc over the terrain on their own.
     if (this.flight === undefined) {
       if (this.settling) this.settle(delta);
-      else if (this.window === undefined) this.collide();
+      else if (this.window === undefined && !this.pinned) this.collide();
     }
     if (this.window !== undefined) {
       const y = MathUtils.clamp(this.controls.target.y, this.window.minY, this.window.maxY - 1);
@@ -263,6 +306,11 @@ export class CameraRig {
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("blur", this.onBlur);
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
+    window.removeEventListener("pointerdown", this.onPointerDown, true);
+    window.removeEventListener("pointermove", this.onPointerMove, true);
+    window.removeEventListener("pointerup", this.onPointerUp, true);
+    window.removeEventListener("pointercancel", this.onPointerCancel, true);
+    window.removeEventListener("focusin", this.onFocusIn);
   }
 
   /** Suspend orbit/keyboard input while a selection handle owns the pointer. */
@@ -274,6 +322,10 @@ export class CameraRig {
 
   stopMovement(): void {
     this.keys.clear();
+    this.pressed.clear();
+    this.pointers.clear();
+    this.shiftBlocked = false;
+    this.gesture = undefined;
     this.heldVertical = 0;
   }
 
@@ -283,7 +335,7 @@ export class CameraRig {
     this.settling = false;
     // Cave navigation may pass through rock. Retargeting onto a nearby wall would
     // repeatedly move the orbit pivot and trap the camera in narrow passages.
-    if (this.window !== undefined) return;
+    if (this.window !== undefined || this.pinned) return;
     const { minDistance, maxDistance, target } = this.controls;
     // The camera looks at the orbit point, so moving it along the view ray keeps the view.
     const direction = target.clone().sub(this.camera.position).normalize();
@@ -406,6 +458,7 @@ export class CameraRig {
     if (!this.enabled) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    this.interact("zoom");
     this.takeOver();
     const ray = pointerRay(this.camera, this.element, event.clientX, event.clientY);
     const hit = this.terrain.raycast(ray.origin, ray.direction, this.camera.far);
@@ -415,8 +468,17 @@ export class CameraRig {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    this.pressed.add(event.code);
+    if (!SHIFT_KEYS.has(event.code) && [...this.pressed].some((key) => SHIFT_KEYS.has(key)))
+      this.shiftBlocked = true;
+    if (SHIFT_KEYS.has(event.code) && !event.repeat) {
+      this.shiftSince = performance.now();
+      this.shiftBlocked =
+        this.pointers.size > 0 || [...this.pressed].some((key) => !SHIFT_KEYS.has(key));
+    }
     if (
       !this.enabled ||
+      event.defaultPrevented ||
       event.target instanceof HTMLInputElement ||
       event.target instanceof HTMLSelectElement ||
       event.target instanceof HTMLTextAreaElement ||
@@ -424,16 +486,99 @@ export class CameraRig {
       event.altKey ||
       event.ctrlKey ||
       event.metaKey ||
+      (VERTICAL_KEYS.has(event.code) && !this.navigationTarget(event.target)) ||
       (!MOVE_KEYS.has(event.code) && !(this.window && VERTICAL_KEYS.has(event.code)))
     )
       return;
     event.preventDefault();
+    if (!SHIFT_KEYS.has(event.code))
+      this.interact(
+        event.code === "KeyQ" || event.code === "KeyE"
+          ? "rotate"
+          : event.code === "KeyR" || event.code === "KeyF"
+            ? "zoom"
+            : "pan",
+      );
     if (!this.keys.has(event.code)) this.takeOver();
     this.keys.add(event.code);
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
     this.keys.delete(event.code);
+    this.pressed.delete(event.code);
+    if (![...this.pressed].some((key) => SHIFT_KEYS.has(key))) this.shiftBlocked = false;
+  };
+
+  private navigationTarget(target: EventTarget | null): boolean {
+    return (
+      target === window ||
+      target === document ||
+      target === document.body ||
+      target === document.documentElement ||
+      target === this.element ||
+      (target instanceof HTMLElement && target === this.element.closest('[role="application"]'))
+    );
+  }
+
+  private interact(action: CameraInteraction): void {
+    this.onInteraction?.(action);
+  }
+
+  private readonly onPointerDown = (event: PointerEvent): void => {
+    this.pointers.add(event.pointerId);
+    if ([...this.pressed].some((key) => SHIFT_KEYS.has(key))) this.shiftBlocked = true;
+    if (!(event.target instanceof Node) || !this.element.contains(event.target)) return;
+    // Compensate MapControls' built-in Shift swap through its public mapping.
+    // Ctrl/Meta retain their existing behavior; Shift only belongs to descent.
+    const swap = event.shiftKey && !event.ctrlKey && !event.metaKey;
+    this.controls.mouseButtons.LEFT = swap ? MOUSE.ROTATE : MOUSE.PAN;
+    this.controls.mouseButtons.RIGHT = swap ? MOUSE.PAN : MOUSE.ROTATE;
+    const rotate = (event.button === 2) !== (event.ctrlKey || event.metaKey);
+    this.gesture = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      action: event.button === 1 || this.pointers.size > 1 ? "zoom" : rotate ? "rotate" : "pan",
+      moved: false,
+    };
+  };
+
+  private readonly onPointerMove = (event: PointerEvent): void => {
+    const gesture = this.gesture;
+    if (this.enabled && gesture && this.pointers.size > 1 && this.pointers.has(event.pointerId)) {
+      gesture.moved = true;
+      this.interact("zoom");
+      return;
+    }
+    if (
+      !this.enabled ||
+      !gesture ||
+      gesture.id !== event.pointerId ||
+      gesture.moved ||
+      Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) < 4
+    )
+      return;
+    gesture.moved = true;
+    this.interact(gesture.action);
+  };
+
+  private readonly onPointerUp = (event: PointerEvent): void => {
+    this.pointers.delete(event.pointerId);
+    if (this.gesture?.id !== event.pointerId) return;
+    if (this.enabled && !this.gesture.moved) this.interact("click");
+    this.gesture = undefined;
+  };
+
+  private readonly onPointerCancel = (event: PointerEvent): void => {
+    this.pointers.delete(event.pointerId);
+    if (this.gesture?.id === event.pointerId) this.gesture = undefined;
+  };
+
+  private readonly onFocusIn = (event: FocusEvent): void => {
+    if (!this.navigationTarget(event.target)) {
+      this.keys.delete("Space");
+      this.shiftBlocked = true;
+    }
   };
 
   private readonly onBlur = (): void => {

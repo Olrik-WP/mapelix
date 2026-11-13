@@ -12,7 +12,9 @@ nearby wall. This avoids the oversized collision sweep and wall pivot that could
 trap exploration in a narrow cavern. The orbit focus stays within the visible
 slice; the camera can stand above the cut for an overview.
 
-Page Up/Page Down move the camera and focus vertically at 12 blocks/second.
+Space/Shift move the camera and focus vertically at 12 blocks/second.
+Page Up/Page Down remain aliases. Shift alone descends; it no longer swaps
+mouse pan/orbit. Space never takes over focused buttons or form controls.
 The prototype also supplies 44-pixel touch buttons held to ascend/descend. Input
 stops on release, cancellation, lost capture, blur, hidden document, selection
 drag or manual view switch. Text/number/select/contenteditable fields keep their
@@ -70,12 +72,12 @@ The generic worktree does not own the integration's `embed.ts`.
 
 New `WorldViewerOptions`:
 
-| Option                                            | Meaning                                                                                                                                                                                    |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `loadDepth(context, signal): Promise<WorldInfo>`  | Host metadata loader using its own URL base/authentication. Return canonical metadata for exactly that context and current snapshot. Honor the abort signal.                               |
-| `autoDepth?: boolean`                             | Initially enable following; defaults to false. Has no effect without a loader.                                                                                                             |
-| `autoDepthIntervalMs?: number`                    | Minimum request interval, default 2000, at least 1000.                                                                                                                                     |
-| `onDepthChange?: (context: SceneContext) => void` | Called after a successful automatic transition. Includes dimension, mode, minY, exclusive maxY and ceilingY. Update host controls/state; do not call setWorld again for this notification. |
+| Option                                            | Meaning                                                                                                                                                                                                                                 |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `loadDepth(context, signal): Promise<WorldInfo>`  | Host metadata loader using its own URL base/authentication. Return canonical metadata for exactly that context and current snapshot. Honor the abort signal.                                                                            |
+| `autoDepth?: boolean`                             | Initially enable following; defaults to false. Has no effect without a loader.                                                                                                                                                          |
+| `autoDepthIntervalMs?: number`                    | Minimum request interval, default 2000, at least 1000.                                                                                                                                                                                  |
+| `onDepthChange?: (context: SceneContext) => void` | Called after a successful automatic transition or discovery navigation that changes context. Includes dimension, mode, minY, exclusive maxY and ceilingY. Update host controls/state; do not call setWorld again for this notification. |
 
 New methods:
 

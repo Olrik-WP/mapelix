@@ -39,7 +39,9 @@ An unvisited dimension displays empty space until the copied world contains chun
 - Select **Caves** in the View menu to explore a vertical slice, including sealed negative-Y
   caverns. Choose 16/32 blocks and release the depth slider to rebuild. Cave streaming uses
   LOD 0/1, a maximum 128-block radius, fixed exploration lighting and bounded resources.
-  **Page Up / Page Down** or the held **Ascend / Descend** buttons move vertically.
+  **Space / Shift** or the held **Ascend / Descend** buttons move vertically.
+  Space belongs to the view/page only; focused buttons and form controls retain it.
+  Shift alone descends and never swaps mouse actions. Page Up/Down remain aliases.
   **Follow depth automatically** moves the slice in 16-block steps as you approach its edge;
   turn it off to inspect a fixed slice. This preference survives reloads and shared links.
   **Recover view** restores an overview of the current slice without changing X/Z.
@@ -48,7 +50,12 @@ An unvisited dimension displays empty space until the copied world contains chun
   bounds or drag the 3D Move/Resize handles. Moving Y commits a new slice when released.
 - Open **Discoveries** to enable nearby source indexing and markers. Filter by category,
   ore type and exposure, including fully buried resources. **Search all heights** also
-  finds blocks outside the current slice. Clicking a marker/result opens its cave slice.
+  finds blocks outside the current slice. In Surface mode, leave it off for objects
+  near the loaded surface; enable it to include deeply covered objects as well.
+  Clicking a surface object stays on Surface; a deeply covered object opens its cave slice.
+  From Caves, navigation retains Caves and opens another slice when needed.
+  Framing preserves orientation, approaches moderately and opens one details card.
+  A blank click, pan or zoom dismisses the card; orbiting retains it.
   Filters persist in shared links and browser preferences. Search/display/cache limits
   are bounded and shown when reached; no container contents are exposed.
 - Nether starts at the Overworld spawn divided by eight; End starts at X 100, Z 0. These
@@ -87,6 +94,8 @@ disk writes. The terrain URL base and suffix remain configurable independently
 of `discoveryBase`/`discoverySuffix` in embedded consumers.
 Optional automatic-depth loading, mobile methods and the backwards-compatible embed 3
 handoff are described in [cave navigation](../../docs/cave-navigation.md).
+Discovery framing, the Surface proximity rule and optional translated/host-owned
+details are described in [discovery navigation](../../docs/discovery-navigation.md).
 
 ## Validation
 

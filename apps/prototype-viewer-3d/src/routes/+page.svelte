@@ -311,19 +311,14 @@
 
   async function exploreDiscovery(group: DiscoveryGroup): Promise<void> {
     if (!viewer || group.dimension !== dimension) return;
-    const current = viewer.snapshot().context;
-    if (current.mode !== "caves" || group.y < current.minY || group.y >= current.maxY) {
-      const config = DIMENSIONS[dimension];
-      const thickness = current.mode === "caves" ? current.maxY - current.minY : sliceThickness;
-      const minY = Math.max(
-        config.minY,
-        Math.min(config.maxY - thickness, Math.floor(group.y / 16) * 16),
-      );
-      await loadContext?.(sceneContext(dimension, { mode: "caves", minY, maxY: minY + thickness }));
+    if (await viewer.focusDiscovery(group)) {
+      snapshot = viewer.snapshot();
+      if (world) {
+        world = { ...world, ...snapshot.context };
+        updateContext(world);
+      }
+      selectedArea = snapshot.selection;
     }
-    const context = viewer?.snapshot().context;
-    if (context?.mode === "caves" && group.y >= context.minY && group.y < context.maxY)
-      viewer?.focusOn(group);
   }
 </script>
 
