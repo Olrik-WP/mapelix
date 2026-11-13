@@ -18,6 +18,7 @@ import {
 import { regionEntry, type SurfaceHit } from "./quad-collider";
 import { RegionMesh, type RegionMeshPool } from "./region-mesh";
 import { ExplorationRequests } from "./exploration-requests";
+import { exteriorBlock } from "./surface-visibility";
 import type { SceneMaterials } from "./shaders/materials";
 import {
   selectionContains,
@@ -126,6 +127,43 @@ export class RegionStreamer {
   private readonly context;
   private readonly maxLevel: number;
   private selection: HorizontalSelection | undefined;
+  private detailRevision = 0;
+
+  get surfaceRevision(): number {
+    return this.detailRevision;
+  }
+
+  /** A proof of Surface visibility must never use a reduced cell's height. */
+  exactHeightAt(x: number, z: number): number | undefined {
+    const span = regionSpan(0),
+      rx = Math.floor(x / span),
+      rz = Math.floor(z / span);
+    const region = this.cache.get(regionKey(0, rx, rz))?.mesh?.region;
+    if (!region || region.level !== 0 || region.cellSize !== 1) return undefined;
+    const height =
+      region.heights[
+        (Math.floor(z) - region.originZ) * region.gridSize + Math.floor(x) - region.originX
+      ];
+    return height === EMPTY_HEIGHT ? undefined : height;
+  }
+
+  isSurfaceBlock(x: number, y: number, z: number): boolean {
+    if (this.context.mode !== "surface") return false;
+    return exteriorBlock(
+      x,
+      y,
+      z,
+      (cx, cz) => this.exactHeightAt(cx, cz),
+      (cx, cy, cz, axis, sign) => {
+        const span = regionSpan(0);
+        return (
+          this.cache
+            .get(regionKey(0, Math.floor(cx / span), Math.floor(cz / span)))
+            ?.mesh?.collider.hasBlockFace(cx, cy, cz, axis, sign) ?? false
+        );
+      },
+    );
+  }
 
   constructor(options: StreamingOptions) {
     this.options = options;
@@ -415,6 +453,7 @@ export class RegionStreamer {
   private store(target: RegionNode, mesh: RegionMesh | undefined): void {
     this.cache.set(target.key, { mesh, lastDrawn: this.frame });
     this.bytes += mesh?.byteLength ?? 0;
+    if (target.level === 0) this.detailRevision++;
     this.options.onRegion();
   }
 
@@ -428,6 +467,7 @@ export class RegionStreamer {
     for (const [key, cached] of stale) {
       if (this.bytes <= this.options.memoryBudget * 0.85 && this.cache.size <= maxEntries) break;
       this.cache.delete(key);
+      if (key.startsWith("0/")) this.detailRevision++;
       this.bytes -= cached.mesh?.byteLength ?? 0;
       cached.mesh?.dispose();
     }

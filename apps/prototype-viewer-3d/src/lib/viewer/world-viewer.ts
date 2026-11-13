@@ -230,8 +230,8 @@ export class WorldViewer {
     this.rig.setVerticalWindow(this.context.mode === "caves" ? this.context : undefined);
     this.discoveries = new DiscoveryStreamer(container, {
       explorationRequests: this.explorationRequests,
-      surfaceHeightAt: (x, z) =>
-        this.context.mode === "surface" ? this.streamer.heightAt(x, z) : undefined,
+      isSurfaceBlock: (x, y, z) => this.streamer.isSurfaceBlock(x, y, z),
+      onPointerSelect: () => renderer.domElement.focus({ preventScroll: true }),
       ...(options.discoveryBase === undefined ? {} : { base: options.discoveryBase }),
       ...(options.discoverySuffix === undefined ? {} : { suffix: options.discoverySuffix }),
       ...(options.discoveryMemoryBudget === undefined
@@ -515,10 +515,11 @@ export class WorldViewer {
     this.depthFollow.cancel();
     const controller = new AbortController();
     this.discoveryRequest = controller;
+    const exposed = this.discoveries.isExposedDiscovery(group);
     const target = discoveryContext(
       group,
       this.context,
-      this.streamer.heightAt(group.x, group.z),
+      this.discoveries.isSurfaceDiscovery(group),
       this.caveThickness,
     );
     let contextChanged = false;
@@ -555,12 +556,16 @@ export class WorldViewer {
           x: group.x,
           y: group.y,
           z: group.z,
-          distance: discoveryDistance(group, previous.distance),
+          distance: discoveryDistance(group, previous.distance, {
+            maxY: this.context.maxY,
+            pitch: previous.pitch,
+            exposed,
+          }),
         },
         { settle: false },
       );
       this.selectedDiscovery = group;
-      this.refineDiscovery = true;
+      this.refineDiscovery = exposed;
       this.discoveryDetails.show(group);
       this.fitViewDistance();
       this.regionsChanged = true;
@@ -639,6 +644,7 @@ export class WorldViewer {
     }
     if (this.streamer.animate(performance.now())) this.regionsChanged = true;
     const terrain = this.streamer.stats;
+    this.discoveries.setTerrainRevision(this.streamer.surfaceRevision);
     if (this.refineDiscovery && terrain.loading === 0 && terrain.remaining === 0) {
       this.refineDiscovery = false;
       const view = this.snapshot().view;

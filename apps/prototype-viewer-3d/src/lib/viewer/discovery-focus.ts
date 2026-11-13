@@ -11,62 +11,60 @@ import {
   type DiscoveryTile,
 } from "@mapelix/scene-prototype/discoveries";
 
-/** Viewer-only proximity policy; this never changes stored source indexes. */
-export const SURFACE_DISCOVERY_DEPTH = 8;
-export function nearSurface(y: number, height: number | undefined): boolean {
-  return height === undefined || height - (y + 1) <= SURFACE_DISCOVERY_DEPTH;
-}
-
 /** Cooperatively filter source tiles using loaded terrain, preserving cached packets. */
 export function* surfaceDiscoveryTiles(
   tiles: readonly DiscoveryTile[],
-  heightAt: (x: number, z: number) => number | undefined,
+  visible: (x: number, y: number, z: number) => boolean,
 ): Generator<void, readonly DiscoveryTile[]> {
   const result: DiscoveryTile[] = [];
   let scanned = 0;
   for (const tile of tiles) {
-    const checked = new Uint8Array(1024),
-      heights: (number | undefined)[] = Array(1024),
-      words: number[] = [];
+    const words: number[] = [];
     for (const word of tile.blocks) {
       if (++scanned % 256 === 0) yield;
-      const block = unpackDiscoveryBlock(tile, word),
-        key = (block.x & 31) + (block.z & 31) * 32;
-      if (!checked[key]) {
-        checked[key] = 1;
-        heights[key] = heightAt(block.x, block.z);
-      }
-      if (nearSurface(block.y, heights[key])) words.push(word);
+      const block = unpackDiscoveryBlock(tile, word);
+      if (block.exposure === "exposed" && visible(block.x, block.y, block.z)) words.push(word);
     }
     result.push({ ...tile, blocks: Uint32Array.from(words) });
   }
   return result;
 }
 
-/** Surface objects remain on Surface; deeply covered objects need their cave window. */
+/** Only positively verified exterior objects stay on Surface. */
 export function discoveryContext(
   group: DiscoveryGroup,
   current: SceneContext,
-  surfaceHeight?: number,
+  surfaceVisible = false,
   surfaceThickness: number = CAVE_LIMITS.defaultThickness,
 ): SceneContext {
   if (group.dimension !== current.dimension)
     throw new RangeError("Discovery belongs to another dimension");
-  if (current.mode === "surface" && group.y < current.maxY && nearSurface(group.y, surfaceHeight))
-    return current;
+  if (current.mode === "surface" && group.y < current.maxY && surfaceVisible) return current;
   if (current.mode === "caves" && group.y >= current.minY && group.y < current.maxY) return current;
   const thickness = current.mode === "caves" ? current.maxY - current.minY : surfaceThickness;
   const limits = DIMENSIONS[group.dimension];
   const minY = Math.max(
     limits.minY,
-    Math.min(limits.maxY - thickness, Math.floor(group.y / 16) * 16),
+    Math.min(limits.maxY - thickness, Math.ceil((group.y + 1) / 16) * 16 - thickness),
   );
   return sceneContext(group.dimension, { mode: "caves", minY, maxY: minY + thickness });
 }
 
-export function discoveryDistance(group: DiscoveryGroup, previous: number): number {
+export function discoveryDistance(
+  group: DiscoveryGroup,
+  previous: number,
+  clearance?: { readonly maxY: number; readonly pitch: number; readonly exposed?: boolean },
+): number {
   const span = Math.max(group.maxX - group.minX, group.maxY - group.minY, group.maxZ - group.minZ);
-  return Math.min(previous, Math.max(18, Math.min(40, 16 + span * 1.5)));
+  const nominal = Math.max(18, Math.min(40, 16 + span * 1.5));
+  const exposed = clearance?.exposed ?? (group.exposed === group.count && group.unknown === 0);
+  if (exposed) return Math.min(previous, nominal);
+  // A ray from a buried block meets an exit face, not an obstacle in open air.
+  // Back out above the slice instead of putting a close camera inside that block.
+  const outside = clearance
+    ? (clearance.maxY - group.y + 0.75) / Math.max(0.1, Math.sin(clearance.pitch))
+    : 0;
+  return Math.min(CAVE_LIMITS.viewDistance * 0.75, Math.max(nominal, outside));
 }
 
 export interface DiscoveryDetailText {

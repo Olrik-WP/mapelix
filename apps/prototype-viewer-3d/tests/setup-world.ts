@@ -24,5 +24,24 @@ export default async function setupWorld(): Promise<void> {
       0,
       Array.from({ length: 24 }, () => 1),
     ),
+    ...[4, 5].map((section) =>
+      sectionRecord(0, 3, 0, section, (x, y, z) => {
+        if (
+          (x === 60 && y === 75 && z >= 8 && z <= 10) ||
+          (x === 52 && y === 73 && z === 8) ||
+          (x === 61 && y === 75 && z === 5) ||
+          (x === 58 && y === 80 && z === 3)
+        )
+          return "minecraft:copper_ore";
+        if (x >= 50 && x <= 58 && z >= 4 && z <= 11 && y >= 74 && y <= 77) return "minecraft:air";
+        return y <= (x >= 62 ? 70 : 80) ? "minecraft:dirt" : "minecraft:air";
+      }),
+    ),
+    biomeRecord(
+      0,
+      3,
+      0,
+      Array.from({ length: 24 }, () => 1),
+    ),
   ]);
 }

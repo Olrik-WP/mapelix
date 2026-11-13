@@ -62,7 +62,7 @@
   <div class="buttons">
     <button
       type="button"
-      title="Descend (Shift)"
+      title="Descend (C)"
       onpointerdown={(event) => press(event, -1)}
       onpointerup={release}
       onpointercancel={release}
@@ -102,7 +102,7 @@
     /> Follow depth automatically</label
   >
   <p role="status">
-    {navigation.loading ? "Opening next depth…" : "Space ↑ / Shift ↓, or hold the buttons"}
+    {navigation.loading ? "Opening next depth…" : "Space ↑ / C ↓, or hold the buttons"}
   </p>
   {#if navigation.error}<p class="error" role="status">{navigation.error}</p>{/if}
 </div>
