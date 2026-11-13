@@ -5,12 +5,7 @@ import {
   type DiscoveryGroup,
   type DiscoveryTile,
 } from "@mapelix/scene-prototype/discoveries";
-import {
-  discoveryContext,
-  discoveryDistance,
-  nearSurface,
-  surfaceDiscoveryTiles,
-} from "./discovery-focus";
+import { discoveryContext, discoveryDistance, surfaceDiscoveryTiles } from "./discovery-focus";
 
 const group = (y: number): DiscoveryGroup => ({
   dimension: "overworld",
@@ -38,7 +33,7 @@ describe("discovery framing", () => {
     );
     const original = blocks.slice(),
       tile: DiscoveryTile = { dimension: "overworld", x: 0, z: 0, sourceChunks: 15, blocks };
-    const iterator = surfaceDiscoveryTiles([tile], () => 82);
+    const iterator = surfaceDiscoveryTiles([tile], (_x, y) => y === 81);
     let yields = 0;
     while (true) {
       const step = iterator.next();
@@ -51,21 +46,26 @@ describe("discovery framing", () => {
     expect(yields).toBe(4);
     expect(blocks).toEqual(original);
   });
-  it("treats exactly eight blocks below the column top as near Surface", () => {
-    expect(nearSurface(73, 82)).toBe(true);
-    expect(nearSurface(72, 82)).toBe(false);
+  it("requires positive visibility and never accepts a shallow or unknown buried point", () => {
+    expect(discoveryContext(group(77), sceneContext(), false)).toMatchObject({
+      mode: "caves",
+      minY: 48,
+      maxY: 80,
+    });
+    expect(discoveryContext(group(81), sceneContext())).toMatchObject({ mode: "caves" });
   });
   it("keeps surface objects on Surface and opens a negative cave slice for deeply covered objects", () => {
     const surface = sceneContext();
-    expect(discoveryContext(group(81), surface, 82)).toEqual(surface);
-    expect(discoveryContext(group(76), surface, 82)).toEqual(surface);
-    expect(discoveryContext(group(-63), surface, 82)).toMatchObject({
+    expect(discoveryContext(group(81), surface, true)).toEqual(surface);
+    expect(discoveryContext(group(-63), surface, false)).toMatchObject({
       mode: "caves",
       minY: -64,
       maxY: -32,
     });
-    expect(discoveryContext(group(81), surface)).toEqual(surface);
-    expect(discoveryContext(group(-63), surface, 82, 16)).toMatchObject({ minY: -64, maxY: -48 });
+    expect(discoveryContext(group(-63), surface, false, 16)).toMatchObject({
+      minY: -64,
+      maxY: -48,
+    });
   });
   it("retains cave thickness, compatible aliases and an already visible slice", () => {
     const caves = sceneContext("overworld", { mode: "caves", minY: -32, maxY: -16 });
@@ -75,7 +75,7 @@ describe("discovery framing", () => {
       maxY: -48,
       ceilingY: -48,
     });
-    expect(discoveryContext(group(81), caves, 82)).toMatchObject({
+    expect(discoveryContext(group(81), caves, true)).toMatchObject({
       mode: "caves",
       minY: 80,
       maxY: 96,
@@ -85,5 +85,17 @@ describe("discovery framing", () => {
     expect(discoveryDistance(group(81), 160)).toBe(18);
     expect(discoveryDistance({ ...group(81), maxX: 80 }, 160)).toBe(40);
     expect(discoveryDistance(group(81), 6)).toBe(6);
+  });
+  it("keeps a buried point in the upper section and backs the camera out above the cut", () => {
+    const buried = { ...group(65), exposed: 0, buried: 1 };
+    const context = discoveryContext(buried, sceneContext());
+    expect(context).toMatchObject({ mode: "caves", minY: 48, maxY: 80 });
+    const distance = discoveryDistance(buried, 6, { maxY: context.maxY, pitch: 0.9 });
+    expect(distance).toBeGreaterThanOrEqual(18);
+    expect(buried.y + Math.sin(0.9) * distance).toBeGreaterThan(context.maxY);
+    expect(discoveryDistance(buried, 6, { maxY: 80, pitch: 0.15 })).toBe(96);
+    const mixed = { ...buried, count: 2, exposed: 1 };
+    expect(discoveryDistance(mixed, 6)).toBe(18);
+    expect(discoveryDistance(mixed, 6, { maxY: 80, pitch: 0.9, exposed: true })).toBe(6);
   });
 });

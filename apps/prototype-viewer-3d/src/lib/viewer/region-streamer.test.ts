@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Group, PerspectiveCamera } from "three/webgpu";
-import { EMPTY_HEIGHT, encodeSceneRegion } from "@mapelix/scene-prototype/format";
+import { EMPTY_HEIGHT, encodeSceneRegion, regionGridSize } from "@mapelix/scene-prototype/format";
 import { sceneContext } from "@mapelix/scene-prototype/dimensions";
 import type { SceneMaterials } from "./shaders/materials";
 import { RegionStreamer, type StreamingOptions } from "./region-streamer";
@@ -63,6 +63,45 @@ afterEach(() => {
 });
 
 describe("dimension streaming lifecycle", () => {
+  it("never uses a cached/drawn coarse height as exact Surface evidence", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const [level, x, z] = new URL(String(input), "http://localhost").pathname
+        .split("/")
+        .slice(-3)
+        .map(Number);
+      return new Response(
+        new Uint8Array(
+          encodeSceneRegion({
+            level: level!,
+            x: x!,
+            z: z!,
+            minY: 0,
+            maxY: 81,
+            heights: new Int16Array(regionGridSize(level!) ** 2).fill(81),
+            opaque: new Uint32Array(),
+            plants: new Uint32Array(),
+            translucent: new Uint32Array(),
+          }),
+        ).buffer,
+      );
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const streamer = stream("overworld", {
+      viewDistance: 128,
+      voxelPixels: 0.01,
+      blockPixels: 1e9,
+    });
+    const camera = new PerspectiveCamera(50, 1, 1, 1000);
+    camera.position.set(16, 200, 16);
+    camera.lookAt(16, 80, 16);
+    streamer.update(camera, 600);
+    await vi.waitFor(() => expect(streamer.stats.cached).toBe(1));
+    streamer.update(camera, 600);
+    expect(streamer.heightAt(16, 16)).toBe(81);
+    expect(streamer.exactHeightAt(16, 16)).toBeUndefined();
+    expect(streamer.isSurfaceBlock(16, 80, 16)).toBe(false);
+    streamer.dispose();
+  });
   it("pauses scheduling after a 429 instead of retrying every frame", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(null, {

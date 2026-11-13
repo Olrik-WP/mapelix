@@ -3,6 +3,7 @@ import { MathUtils, MOUSE, Quaternion, Ray, Vector3, type PerspectiveCamera } fr
 
 import type { SurfaceHit } from "./quad-collider";
 import { CAVE_LIMITS, type VerticalBounds } from "@mapelix/scene-prototype/dimensions";
+import { HeldKeys, keyboardSpeed } from "./camera-input";
 
 /** What the camera reads from the loaded terrain. */
 export interface Terrain {
@@ -55,8 +56,7 @@ const MOVE_KEYS = new Set([
   ...["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF"],
   ...["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"],
 ]);
-const VERTICAL_KEYS = new Set(["Space", "ShiftLeft", "ShiftRight", "PageUp", "PageDown"]);
-const SHIFT_KEYS = new Set(["ShiftLeft", "ShiftRight"]);
+const VERTICAL_KEYS = new Set(["Space", "KeyC", "PageUp", "PageDown"]);
 export type VerticalMovement = -1 | 0 | 1;
 export type CameraInteraction = "pan" | "zoom" | "rotate" | "click";
 
@@ -65,14 +65,14 @@ export type CameraInteraction = "pan" | "zoom" | "rotate" | "click";
  * surface under the cursor. Each drag, wheel step, or key press puts the orbit point on
  * the first surface in the middle of the view. The camera slides along surfaces it runs
  * into and climbs walls. Keyboard keys pan (WASD), turn (Q and E), and zoom (R and F).
- * Caves retain their pivot, allow passage through walls, and add Space/Shift movement.
+ * Caves retain their pivot, allow passage through walls, and add Space/C movement.
  */
 export class CameraRig {
   private readonly camera: PerspectiveCamera;
   private readonly element: HTMLElement;
   private readonly controls: MapControls;
   private readonly terrain: Terrain;
-  private readonly keys = new Set<string>();
+  private readonly keys = new HeldKeys();
   private readonly lastPosition = new Vector3();
   private readonly lastTarget = new Vector3();
   /** Where the camera last stood clear of the terrain. Collisions sweep from here. */
@@ -84,10 +84,7 @@ export class CameraRig {
   private zoomUnlocked = false;
   private enabled = true;
   private heldVertical: VerticalMovement = 0;
-  private readonly pressed = new Set<string>();
   private readonly pointers = new Set<number>();
-  private shiftBlocked = false;
-  private shiftSince = 0;
   private gesture:
     | { id: number; x: number; y: number; action: CameraInteraction; moved: boolean }
     | undefined;
@@ -153,12 +150,7 @@ export class CameraRig {
     return Math.sign(
       this.heldVertical +
         Number(this.keys.has("Space") || this.keys.has("PageUp")) -
-        Number(
-          this.keys.has("PageDown") ||
-            (!this.shiftBlocked &&
-              performance.now() - this.shiftSince >= 180 &&
-              (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight"))),
-        ),
+        Number(this.keys.has("KeyC") || this.keys.has("PageDown")),
     ) as VerticalMovement;
   }
 
@@ -269,6 +261,7 @@ export class CameraRig {
   /** Advances input and flights. Returns whether the camera moved this frame. */
   update(delta: number): boolean {
     if (!this.enabled) return false;
+    this.keys.expire(performance.now());
     this.fly(delta);
     this.applyKeys(delta);
     const vertical = this.verticalMovement;
@@ -322,9 +315,7 @@ export class CameraRig {
 
   stopMovement(): void {
     this.keys.clear();
-    this.pressed.clear();
     this.pointers.clear();
-    this.shiftBlocked = false;
     this.gesture = undefined;
     this.heldVertical = 0;
   }
@@ -376,7 +367,7 @@ export class CameraRig {
     forward.y = 0;
     forward.normalize();
     const right = new Vector3().crossVectors(forward, UP);
-    const speed = Math.max(24, this.distance * 1.1) * delta;
+    const speed = keyboardSpeed(this.distance, this.window !== undefined) * delta;
     const move = new Vector3();
     if (this.keys.has("KeyW") || this.keys.has("ArrowUp")) move.add(forward);
     if (this.keys.has("KeyS") || this.keys.has("ArrowDown")) move.sub(forward);
@@ -468,16 +459,9 @@ export class CameraRig {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    this.pressed.add(event.code);
-    if (!SHIFT_KEYS.has(event.code) && [...this.pressed].some((key) => SHIFT_KEYS.has(key)))
-      this.shiftBlocked = true;
-    if (SHIFT_KEYS.has(event.code) && !event.repeat) {
-      this.shiftSince = performance.now();
-      this.shiftBlocked =
-        this.pointers.size > 0 || [...this.pressed].some((key) => !SHIFT_KEYS.has(key));
-    }
     if (
       !this.enabled ||
+      document.hidden ||
       event.defaultPrevented ||
       event.target instanceof HTMLInputElement ||
       event.target instanceof HTMLSelectElement ||
@@ -491,22 +475,19 @@ export class CameraRig {
     )
       return;
     event.preventDefault();
-    if (!SHIFT_KEYS.has(event.code))
-      this.interact(
-        event.code === "KeyQ" || event.code === "KeyE"
-          ? "rotate"
-          : event.code === "KeyR" || event.code === "KeyF"
-            ? "zoom"
-            : "pan",
-      );
+    this.interact(
+      event.code === "KeyQ" || event.code === "KeyE"
+        ? "rotate"
+        : event.code === "KeyR" || event.code === "KeyF"
+          ? "zoom"
+          : "pan",
+    );
     if (!this.keys.has(event.code)) this.takeOver();
     this.keys.add(event.code);
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
     this.keys.delete(event.code);
-    this.pressed.delete(event.code);
-    if (![...this.pressed].some((key) => SHIFT_KEYS.has(key))) this.shiftBlocked = false;
   };
 
   private navigationTarget(target: EventTarget | null): boolean {
@@ -526,10 +507,9 @@ export class CameraRig {
 
   private readonly onPointerDown = (event: PointerEvent): void => {
     this.pointers.add(event.pointerId);
-    if ([...this.pressed].some((key) => SHIFT_KEYS.has(key))) this.shiftBlocked = true;
     if (!(event.target instanceof Node) || !this.element.contains(event.target)) return;
     // Compensate MapControls' built-in Shift swap through its public mapping.
-    // Ctrl/Meta retain their existing behavior; Shift only belongs to descent.
+    // Ctrl/Meta retain their existing behavior; Shift has no navigation action.
     const swap = event.shiftKey && !event.ctrlKey && !event.metaKey;
     this.controls.mouseButtons.LEFT = swap ? MOUSE.ROTATE : MOUSE.PAN;
     this.controls.mouseButtons.RIGHT = swap ? MOUSE.PAN : MOUSE.ROTATE;
@@ -576,8 +556,8 @@ export class CameraRig {
 
   private readonly onFocusIn = (event: FocusEvent): void => {
     if (!this.navigationTarget(event.target)) {
-      this.keys.delete("Space");
-      this.shiftBlocked = true;
+      // A host pointer button may start held vertical input before it receives focus.
+      this.keys.clear();
     }
   };
 

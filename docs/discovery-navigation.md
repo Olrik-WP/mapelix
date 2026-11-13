@@ -5,17 +5,26 @@ Scene-server, Bedrock Control, Claude's integration worktree, engine packages an
 production are unchanged. No HTTP, region format, discovery schema or cache-key
 revision changes are required. Keep **EMBED_API_VERSION=3**.
 
+The Surface/keyboard corrections after `fe82288` add no public options or methods.
+Hosts only need to update the descent hint from Shift to C and keep using
+`focusDiscovery` and the existing context callback. Source cache identities and
+configurable URL bases/`.bin` suffixes are preserved.
+
 ## Keyboard and selection tools
 
-In Caves, Space ascends and ShiftLeft/ShiftRight alone descend. Page Up/Down remain
-compatible aliases. Space is taken only when the event belongs to the canvas,
+In Caves, Space ascends and C descends. Page Up/Down remain compatible aliases.
+Shift has no camera action; repeated/held Shift can open Windows accessibility
+dialogs and cannot be reliably intercepted by a page. Vertical keys are taken
+only when the event belongs to the canvas,
 its application container or the page body/document. Buttons, checkboxes,
 sliders, selects, text/editable fields and host controls keep their own Space
 handling. PreventDefault is called only when the camera consumes the key.
 
-Shift waits 180 ms to distinguish an isolated press from a chord. Another key or
-pointer press blocks descent until Shift is released. Keyup, blur and a hidden
-document clear input. Shift no longer swaps the mouse actions: the viewer
+Keyup, blur, hidden document and focus entering host controls clear keyboard
+input. Each held key also expires after 600 ms without a keydown/repeat event,
+preventing lost keyups from causing indefinite travel. Horizontal keyboard speed
+is capped at 96 blocks/s in Surface and 32 blocks/s in Caves, including diagonal
+movement; vertical speed remains 12 blocks/s. Shift never swaps mouse actions: the viewer
 compensates through MapControls' public mouse mapping, preserving Ctrl/Meta.
 Right drag continues to orbit; left drag pans. No acceleration uses Shift.
 
@@ -30,21 +39,24 @@ is entirely in the viewer; changing the height checkbox at a fixed location
 does not change source URLs or require another index build/request for cached
 tiles. Filters, display limits and source-cache budgets remain in force.
 
-In Surface, with **Search all heights** off, source blocks near the loaded column
-top are retained. Enabling it also includes deeply covered blocks. This local
+In Surface, with **Search all heights** off, only positively verified exterior
+blocks are retained. Enabling it also includes covered blocks. This local
 filter yields every 256 scanned blocks and shares the existing 2 ms grouping
 budget. Source packets are never modified. In Caves, the checkbox keeps its
 existing meaning: the current slice, or all saved heights.
 
-The exact proximity rule is `columnTop - (blockY + 1) <= 8`. Exactly eight blocks
-counts as near Surface; more than eight counts as deeply covered. It uses the
-already loaded terrain height, not a new ground/roof/foliage index. Trees,
-buildings and coarse terrain can influence it. If the column height is unknown,
-the viewer keeps the object in Surface rather than inventing a buried depth.
-This is a navigation/display heuristic, distinct from saved-block exposure.
+The exact rule requires saved `exposed` status and either an exact column top
+`columnTop === blockY + 1`, or an actual LOD-0 side face owned by that voxel,
+facing an adjacent column whose exact top is at or below `blockY + 1`. This
+retains exposed cliff/bank faces while rejecting cave faces beneath a roof.
+There is no eight-block tolerance. Unknown heights, unknown exposure and coarse
+LOD heights cannot certify visibility. Existing LOD-0 cached terrain is reused;
+no extra terrain/index requests are forced. Distant markers may therefore appear
+only after zooming in and loading exact terrain. Arrival or eviction of exact
+terrain automatically invalidates derived groups and reuses cached source tiles.
 
-Activating discoveries never changes mode. From Surface, clicking a near-surface
-object stays in Surface; clicking a deeply covered object opens its 16/32-block
+Activating discoveries never changes mode. From Surface, clicking a certified
+exterior object stays in Surface; any other object opens its 16/32-block
 cave window. From Caves, clicking an out-of-slice object opens another cave
 window, even for an object near the world surface. There is **no automatic return
 from Caves to Surface** in this change. Every changed window is reported through
@@ -54,19 +66,28 @@ infer the mode from height signs. A manual Surface switch stays host-owned.
 The last chosen 16/32-block thickness is retained when visiting Surface and
 subsequently opening another discovery's cave window; a fresh viewer defaults to 32.
 
-All-height buried markers in Surface are drawn above the loaded terrain so they
-remain selectable. Their underlying coordinates/counts stay unchanged. A marker
+Every marker is projected at the real representative block center, never lifted
+to terrain/water height. In all-height mode its DOM indicator remains selectable
+even when terrain covers the source block. Coordinates/counts stay unchanged. A marker
 or card is not proof that a fully buried block is represented in the mesh.
 
 ## Framing and one details card
 
 `focusDiscovery(group): Promise<boolean>` is the complete navigation operation.
 It preserves heading/pitch, centers the representative coordinates and approaches
-moderately according to group size (nominal distance 18–40 blocks, never zooming
-out from a closer view). After terrain arrives it can shorten the same view ray
-to avoid a loaded cave wall/ceiling, down to 1.5 blocks when needed. The orbit
+moderately according to group size (nominal distance 18–40 blocks, retaining a
+closer view for exposed representative blocks). Newly opened windows put the target in their
+upper 16-block section where dimension bounds allow, reducing the overburden
+above it. Without verified exposure for the selected representative,
+the camera backs out toward/above the cut, capped at the existing
+96-block cave orbit limit. It must not shorten a ray from inside buried rock:
+that ray meets an exit face and would put the camera back into the terrain.
+For exposed representative blocks, after terrain arrives it can shorten the same view ray to
+avoid a loaded cave wall/ceiling, down to 1.5 blocks when needed. The orbit
 pivot remains pinned to the selected point; Surface collision/height settling
-does not lift it back to a roof. This does not reveal fully enclosed source
+does not lift it back to a roof. At very shallow viewing angles the bounded
+orbit may not clear all surrounding rock; Recover view remains available.
+This does not reveal fully enclosed source
 blocks missing from the mesh. The marker/card retains their source information.
 
 Only one group/card is retained. A new selection replaces it. Blank left/right
@@ -75,6 +96,10 @@ view changes and disposal clear it. Mouse orbit and Q/E retain it. Closing a car
 does not turn off discovery filters and does not force a camera zoom jump.
 Reapplying the same validated filter state is a no-op, so host synchronization
 does not dismiss the newly focused discovery or restart its grouping.
+
+A pointer click on a marker returns focus to the canvas, so Space can ascend
+instead of activating that button again. Tab/Enter/Space activation keeps the
+marker keyboard-accessible and preserves its button focus.
 
 If a remembered X/Z clip excludes the clicked point when entering Caves, it is
 cleared so the point is not hidden. The host can read snapshot().selection during
@@ -154,18 +179,19 @@ server routes, source/region revisions or production quotas is needed.
 Unit and browser regressions cover source reuse/filtering, exact depth boundaries,
 negative Y, moderate framing, native French and host-owned cards, callback
 ordering, one-card replacement, dismissal/orbit, keyboard focus/chords/visibility,
-Shift gestures and X/Z resizing. The final checks pass: 39 viewer unit tests,
-build/type/lint checks, the complete 34-case browser suite, and a final six-case
-WebGPU/WebGL run after the last host-sync and touch adjustments. The unchanged
+Shift gestures and X/Z resizing. The corrections following `fe82288` pass 52
+viewer unit tests, build/type/lint checks, the complete 40-case browser suite,
+and a final 12-case WebGPU/WebGL run after the mixed-group exposure and all-height
+regrouping refinements. The unchanged
 engine's 182 tests are reused from the verified Turbo cache.
 
 Both backends complete 104 consecutive Surface/Caves/Nether/End switches.
 Equivalent warmed checkpoints retain 18 textures; uniform buffers decrease
 75→70 (WebGPU) and 77→72 (WebGL). The final 36-switch collected-heap differences
-are 319,168 and 384,116 bytes, below the existing 512 KiB allowance. These are
+are 249,964 and 272,004 bytes, below the existing 512 KiB allowance. These are
 logical renderer allocations and collected JS heap, not physical GPU residency
 or VM RSS. Card disposal removes the single owned DOM section; no GPU resource
-is added for the card. See the [measurement summary](benchmarks/discovery-navigation-2026-11-13.json).
+is added for the card. See the [measurement summary](benchmarks/surface-discovery-fixes-2026-11-13.json).
 
 Browser servers are temporary; no local preview is left running and production
 is not contacted. All worlds used in these checks are generated disposable

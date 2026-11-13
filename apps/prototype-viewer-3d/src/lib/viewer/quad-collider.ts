@@ -133,6 +133,43 @@ export class QuadCollider {
     return hit;
   }
 
+  /** An exact LOD-0 side owned by this voxel, including merged and model faces. */
+  hasBlockFace(x: number, y: number, z: number, axis: number, sign: number): boolean {
+    if (this.region.level !== 0) return false;
+    x -= this.region.originX;
+    z -= this.region.originZ;
+    if (x < 0 || z < 0 || x >= this.region.gridSize || z >= this.region.gridSize) return false;
+    if (!this.sorted) this.sortQuads();
+    const tile = this.tiles[Math.floor(z / TILE) * this.side + Math.floor(x / TILE)]!;
+    const cell = [x, y, z],
+      epsilon = 1e-6;
+    for (const ref of tile.refs) {
+      if (
+        !readFace(this.lists[ref & 1]!, ref >>> 1, face) ||
+        face.axis !== axis ||
+        face.positive !== sign > 0
+      )
+        continue;
+      const plane = face.low[axis]!,
+        coordinate = cell[axis]!;
+      if (
+        sign > 0
+          ? plane <= coordinate + epsilon || plane > coordinate + 1 + epsilon
+          : plane < coordinate - epsilon || plane >= coordinate + 1 - epsilon
+      )
+        continue;
+      if (
+        TANGENTS[axis]!.every(
+          (other) =>
+            face.high[other]! > cell[other]! + epsilon &&
+            face.low[other]! < cell[other]! + 1 - epsilon,
+        )
+      )
+        return true;
+    }
+    return false;
+  }
+
   /** Lists each quad in every tile it reaches. */
   private sortQuads(): void {
     const refs: number[][] = this.tiles.map(() => []);

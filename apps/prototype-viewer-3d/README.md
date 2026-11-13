@@ -39,9 +39,9 @@ An unvisited dimension displays empty space until the copied world contains chun
 - Select **Caves** in the View menu to explore a vertical slice, including sealed negative-Y
   caverns. Choose 16/32 blocks and release the depth slider to rebuild. Cave streaming uses
   LOD 0/1, a maximum 128-block radius, fixed exploration lighting and bounded resources.
-  **Space / Shift** or the held **Ascend / Descend** buttons move vertically.
+  **Space / C** or the held **Ascend / Descend** buttons move vertically.
   Space belongs to the view/page only; focused buttons and form controls retain it.
-  Shift alone descends and never swaps mouse actions. Page Up/Down remain aliases.
+  Shift has no camera action. Page Up/Down remain aliases.
   **Follow depth automatically** moves the slice in 16-block steps as you approach its edge;
   turn it off to inspect a fixed slice. This preference survives reloads and shared links.
   **Recover view** restores an overview of the current slice without changing X/Z.
@@ -51,8 +51,9 @@ An unvisited dimension displays empty space until the copied world contains chun
 - Open **Discoveries** to enable nearby source indexing and markers. Filter by category,
   ore type and exposure, including fully buried resources. **Search all heights** also
   finds blocks outside the current slice. In Surface mode, leave it off for objects
-  near the loaded surface; enable it to include deeply covered objects as well.
-  Clicking a surface object stays on Surface; a deeply covered object opens its cave slice.
+  verified on the exterior surface; enable it to include covered objects as well.
+  Exact terrain must be loaded to certify visibility; zoom in if needed.
+  Clicking a verified surface object stays on Surface; any other object opens its cave slice.
   From Caves, navigation retains Caves and opens another slice when needed.
   Framing preserves orientation, approaches moderately and opens one details card.
   A blank click, pan or zoom dismisses the card; orbiting retains it.

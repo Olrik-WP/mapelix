@@ -5,7 +5,7 @@ import {
   encodeDiscoveryTile,
   packDiscoveryBlock,
 } from "@mapelix/scene-prototype/discoveries";
-import { DiscoveryStreamer } from "./discovery-streamer";
+import { DiscoveryStreamer, type DiscoveryOptions } from "./discovery-streamer";
 import type { WorldInfo } from "./world-viewer";
 
 class Element {
@@ -44,7 +44,7 @@ camera.position.set(16, 20, 30);
 camera.lookAt(focus);
 camera.updateMatrixWorld();
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-function setup(budget?: number) {
+function setup(budget?: number, options: Partial<DiscoveryOptions> = {}) {
   vi.stubGlobal("document", { createElement: () => new Element() });
   const container = new Element();
   const stream = new DiscoveryStreamer(container as unknown as HTMLElement, {
@@ -52,6 +52,7 @@ function setup(budget?: number) {
     suffix: ".bin",
     ...(budget === undefined ? {} : { memoryBudget: budget }),
     onselect: vi.fn(),
+    ...options,
   });
   stream.setWorld(world);
   stream.setFilters({
@@ -67,7 +68,7 @@ function setup(budget?: number) {
       stream.update(camera, point, ready, container as unknown as HTMLElement),
   };
 }
-function response(url: string, indexed = true) {
+function response(url: string, indexed = true, exposure: "buried" | "exposed" = "buried") {
   const u = new URL(url, "http://localhost"),
     parts = u.pathname.split("/");
   const x = Number(parts.at(-2)),
@@ -78,7 +79,7 @@ function response(url: string, indexed = true) {
     z,
     sourceChunks: 15,
     blocks: indexed
-      ? Uint32Array.from([packDiscoveryBlock(14, -63, 20, 6, "buried")])
+      ? Uint32Array.from([packDiscoveryBlock(14, -63, 20, 6, exposure)])
       : new Uint32Array(),
   });
   return new Response(new Uint8Array(bytes).buffer);
@@ -89,6 +90,72 @@ afterEach(() => {
 });
 
 describe("discovery source reuse and lifecycle", () => {
+  it("fails closed without exact terrain and recomputes cached sources while more terrain arrives", async () => {
+    let known = false;
+    const fetcher = vi.fn<typeof fetch>(async (url) => response(String(url), true, "exposed"));
+    vi.stubGlobal("fetch", fetcher);
+    const { stream, tick } = setup(undefined, { isSurfaceBlock: () => known });
+    stream.setWorld({ ...world, mode: "surface", minY: -64, maxY: 320, ceilingY: 320 });
+    stream.setSelection({ minX: 0, maxX: 32, minZ: 0, maxZ: 32 });
+    tick();
+    await flush();
+    tick();
+    expect(stream.stats.matchingBlocks).toBe(0);
+    known = true;
+    stream.setTerrainRevision(1);
+    tick(focus, false);
+    expect(stream.stats.matchingBlocks).toBe(1);
+    expect(stream.isSurfaceDiscovery(stream.stats.groups[0]!)).toBe(true);
+    known = false;
+    stream.setTerrainRevision(2);
+    tick(focus, false);
+    expect(stream.stats.matchingBlocks).toBe(0);
+    expect(fetcher).toHaveBeenCalledOnce();
+    stream.setFilters({
+      ...DEFAULT_DISCOVERY_FILTERS,
+      enabled: true,
+      categories: ["ores"],
+      ores: ["diamond"],
+      allHeights: true,
+    });
+    tick();
+    expect(stream.stats.matchingBlocks).toBe(1);
+    stream.setTerrainRevision(3);
+    expect(stream.stats.matchingBlocks).toBe(1);
+    stream.dispose();
+  });
+  it("checks the selected voxel's exposure in a mixed group", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            new Uint8Array(
+              encodeDiscoveryTile({
+                dimension: "overworld",
+                x: 0,
+                z: 0,
+                sourceChunks: 15,
+                blocks: Uint32Array.of(
+                  packDiscoveryBlock(14, -63, 20, 6, "buried"),
+                  packDiscoveryBlock(15, -63, 20, 6, "exposed"),
+                ),
+              }),
+            ).buffer,
+          ),
+      ),
+    );
+    const { stream, tick } = setup();
+    stream.setSelection({ minX: 0, maxX: 32, minZ: 0, maxZ: 32 });
+    tick();
+    await flush();
+    tick();
+    const group = stream.stats.groups[0]!;
+    expect(group).toMatchObject({ count: 2, exposed: 1, buried: 1 });
+    expect(stream.isExposedDiscovery({ ...group, x: 14 })).toBe(false);
+    expect(stream.isExposedDiscovery({ ...group, x: 15 })).toBe(true);
+    stream.dispose();
+  });
   it("does not restart grouping or requests when the host reapplies identical filters", async () => {
     const fetcher = vi.fn<typeof fetch>(async (url) => response(String(url)));
     vi.stubGlobal("fetch", fetcher);

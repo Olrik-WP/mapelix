@@ -9,6 +9,7 @@ import {
   decodeDiscoveryTile,
   discoveryFilters,
   queryDiscoverySteps,
+  unpackDiscoveryBlock,
   type DiscoveryFilters,
   type DiscoveryGroup,
   type DiscoveryQuery,
@@ -16,14 +17,15 @@ import {
 } from "@mapelix/scene-prototype/discoveries";
 import type { WorldInfo } from "./world-viewer";
 import { ExplorationRequests, ExplorationRequestError } from "./exploration-requests";
-import { nearSurface, surfaceDiscoveryTiles } from "./discovery-focus";
+import { surfaceDiscoveryTiles } from "./discovery-focus";
 
 export interface DiscoveryOptions {
   readonly base?: string;
   readonly suffix?: string;
   readonly memoryBudget?: number;
   readonly explorationRequests?: ExplorationRequests;
-  readonly surfaceHeightAt?: (x: number, z: number) => number | undefined;
+  readonly isSurfaceBlock?: (x: number, y: number, z: number) => boolean;
+  readonly onPointerSelect?: () => void;
   readonly onselect: (group: DiscoveryGroup) => void;
 }
 export interface DiscoveryStats extends DiscoveryQuery {
@@ -69,6 +71,7 @@ export class DiscoveryStreamer {
   private constrained = false;
   private error: string | undefined;
   private transientError = false;
+  private terrainRevision = -1;
   private query: DiscoveryQuery = { groups: [], matchingBlocks: 0, limited: false };
   private grouping: Generator<void, DiscoveryQuery> | undefined;
   private get active(): boolean {
@@ -104,6 +107,7 @@ export class DiscoveryStreamer {
   }
 
   setWorld(world: WorldInfo): void {
+    this.terrainRevision = -1;
     const revision = world.snapshotRevision ?? world.revision;
     if (revision !== this.revision || world.dimension !== this.context.dimension) {
       this.cancel();
@@ -148,6 +152,46 @@ export class DiscoveryStreamer {
     this.selection = selection;
     this.dirty = true;
     this.wantedKey = "";
+  }
+
+  /** A changed/evicted exact region invalidates visibility, never source packets. */
+  setTerrainRevision(revision: number): void {
+    if (this.terrainRevision === revision) return;
+    this.terrainRevision = revision;
+    if (this.context.mode === "surface" && !this.filters.allHeights) {
+      this.clearMarkers();
+      this.dirty = true;
+    }
+  }
+
+  isSurfaceDiscovery(group: DiscoveryGroup): boolean {
+    return (
+      this.context.mode === "surface" &&
+      this.isExposedDiscovery(group) &&
+      (this.options.isSurfaceBlock?.(group.x, group.y, group.z) ?? false)
+    );
+  }
+
+  /** Mixed groups need the representative voxel's exposure, not a neighbor's. */
+  isExposedDiscovery(group: DiscoveryGroup): boolean {
+    if (group.dimension !== this.context.dimension) return false;
+    let exposed = group.exposed === group.count && group.unknown === 0;
+    if (!exposed && group.exposed > 0) {
+      const tile = this.cache.get(`${Math.floor(group.x / 32)}/${Math.floor(group.z / 32)}`)?.tile;
+      for (const word of tile?.blocks ?? []) {
+        const block = unpackDiscoveryBlock(tile!, word);
+        if (
+          block.x === group.x &&
+          block.y === group.y &&
+          block.z === group.z &&
+          block.kind === group.kind
+        ) {
+          exposed = block.exposure === "exposed";
+          break;
+        }
+      }
+    }
+    return exposed;
   }
 
   get stats(): DiscoveryStats {
@@ -220,11 +264,7 @@ export class DiscoveryStreamer {
       );
       if (tile) this.request(tile);
     }
-    if (
-      this.dirty &&
-      !this.grouping &&
-      (terrainReady || this.context.mode !== "surface" || this.filters.allHeights)
-    ) {
+    if (this.dirty && !this.grouping) {
       const tiles: DiscoveryTile[] = [];
       for (const wanted of this.wanted) {
         const cached = this.cache.get(wanted.key);
@@ -259,15 +299,7 @@ export class DiscoveryStreamer {
     });
     for (const marker of this.markers.values()) {
       const g = marker.group;
-      const surface =
-        this.context.mode === "surface" ? this.options.surfaceHeightAt?.(g.x, g.z) : undefined;
-      // Keep buried discoveries readable on Surface without changing indexed coordinates.
-      const y = surface === undefined ? g.y + 0.5 : Math.max(g.y + 0.5, surface + 0.6);
-      marker.button.setAttribute(
-        "data-location",
-        surface !== undefined && !nearSurface(g.y, surface) ? "underground" : "surface",
-      );
-      this.point.set(g.x + 0.5, y, g.z + 0.5).project(camera);
+      this.point.set(g.x + 0.5, g.y + 0.5, g.z + 0.5).project(camera);
       const visible =
         this.point.z >= -1 &&
         this.point.z <= 1 &&
@@ -283,8 +315,8 @@ export class DiscoveryStreamer {
     tiles: readonly DiscoveryTile[],
     focus: { x: number; y: number; z: number },
   ): Generator<void, DiscoveryQuery> {
-    if (this.context.mode === "surface" && !this.filters.allHeights && this.options.surfaceHeightAt)
-      tiles = yield* surfaceDiscoveryTiles(tiles, this.options.surfaceHeightAt);
+    if (this.context.mode === "surface" && !this.filters.allHeights)
+      tiles = yield* surfaceDiscoveryTiles(tiles, this.options.isSurfaceBlock ?? (() => false));
     return yield* queryDiscoverySteps(tiles, this.filters, this.context, focus, this.selection);
   }
 
@@ -383,6 +415,10 @@ export class DiscoveryStreamer {
         const current = marker;
         button.onclick = (event) => {
           event.stopPropagation();
+          if (event.detail > 0) {
+            button.blur();
+            this.options.onPointerSelect?.();
+          }
           this.options.onselect(current.group);
         };
         this.markers.set(group.id, marker);
