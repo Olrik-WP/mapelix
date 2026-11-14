@@ -32,8 +32,9 @@ describe("camera keyboard safety", () => {
   });
   it("bounds translation at extreme zoom in both modes", () => {
     expect(keyboardSpeed(6, false)).toBe(24);
-    expect(keyboardSpeed(2600, false)).toBe(96);
-    expect(keyboardSpeed(20_000, false)).toBe(96);
+    expect(keyboardSpeed(140, false)).toBeCloseTo(154);
+    expect(keyboardSpeed(2600, false)).toBe(160);
+    expect(keyboardSpeed(20_000, false)).toBe(160);
     expect(keyboardSpeed(96, true)).toBe(32);
   });
 });
