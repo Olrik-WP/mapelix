@@ -48,6 +48,14 @@ weather tint their color. Distance fades hide the bounded layer's edges;
 reduced opacity above the layer and high-altitude fading keep overview maps
 readable.
 
+Surface regression follow-up: clouds fade to zero opacity before/at their layer
+height, preserving the clear-water overview instead of adding a white veil.
+Water and glass render before cloud/rain overlays, so water's framebuffer
+refraction never captures those foreground effects. The water shader is unchanged.
+Plain clicks cancel a flight without retargeting the orbit pivot; real gestures
+only acquire terrain within twice the current orbit distance. These additions
+preserve embed 3, source packets and all cache identities.
+
 Weather is manually selected cosmetic styling, independent of saved/server
 weather and biomes. Procedural rain streaks fall around the camera. Loaded
 terrain/roof heights clip them; no additional terrain requests are issued.

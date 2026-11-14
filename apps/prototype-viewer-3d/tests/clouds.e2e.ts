@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { WorldInfo, WorldViewer } from "../src/lib/viewer/world-viewer";
 import type { CloudLayer } from "../src/lib/viewer/cloud-layer";
 import type { Group } from "three/webgpu";
+import type { CameraRig } from "../src/lib/viewer/camera-rig";
 
 declare global {
   interface Window {
@@ -44,7 +45,7 @@ test("block clouds render, drift, retain their option through all contexts and d
     window.__cloudViewer = await WorldViewer.create(
       document.getElementById("viewer")!,
       world,
-      { x: 32, y: 80, z: 16, distance: 220, heading: 0.4, pitch: 0.85 },
+      { x: 32, y: 150, z: 16, distance: 120, heading: 0.4, pitch: 0.15 },
       { clouds: false },
     );
     window.__cloudViewer.setRenderDistance(512);
@@ -76,6 +77,20 @@ test("block clouds render, drift, retain their option through all contexts and d
   await page.waitForTimeout(150);
   const disabled = await page.locator("canvas").screenshot();
   expect(disabled.equals(drifted)).toBe(false);
+  // An overview above the cloud layer must have exactly the clear-sky pixels.
+  await page.evaluate(() => {
+    (Reflect.get(window.__cloudViewer, "rig") as CameraRig).setView(
+      { x: 32, y: 80, z: 16, distance: 220, heading: 0.4, pitch: 0.85 },
+      { settle: false },
+    );
+    window.__cloudViewer.setClouds(true);
+  });
+  await page.waitForTimeout(120);
+  const aboveOn = await page.locator("canvas").screenshot();
+  await page.evaluate(() => window.__cloudViewer.setClouds(false));
+  await page.waitForTimeout(120);
+  const aboveOff = await page.locator("canvas").screenshot();
+  expect(aboveOn.equals(aboveOff)).toBe(true);
   await page.evaluate(() => {
     (Reflect.get(window.__cloudViewer, "streamer") as { root: Group }).root.visible = true;
     window.__cloudViewer.setClouds(true);

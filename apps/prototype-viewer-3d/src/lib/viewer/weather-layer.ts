@@ -19,6 +19,7 @@ import {
 import type { SceneContext } from "@mapelix/scene-prototype/dimensions";
 import type { Atmosphere } from "./atmosphere";
 import { WeatherBudget } from "./weather-budget";
+import { RENDER_ORDER } from "./render-order";
 
 export type WeatherMode = "clear" | "rain" | "thunderstorm";
 export const MAX_RAIN_DROPS = 1024;
@@ -101,6 +102,7 @@ export class WeatherLayer {
     material.maskNode = positionWorld.y.greaterThanEqual(attribute("rainRoof", "float"));
     this.root = new LineSegments(geometry, material);
     this.root.name = "Cosmetic Overworld rain";
+    this.root.renderOrder = RENDER_ORDER.rain;
     this.root.frustumCulled = false;
     this.root.visible = false;
   }

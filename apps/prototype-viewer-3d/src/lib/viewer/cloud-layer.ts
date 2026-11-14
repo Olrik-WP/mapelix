@@ -22,6 +22,7 @@ import {
 } from "three/tsl";
 import type { SceneContext } from "@mapelix/scene-prototype/dimensions";
 import type { Atmosphere } from "./atmosphere";
+import { RENDER_ORDER } from "./render-order";
 
 const CELL = 16;
 const SIDE = 48;
@@ -74,7 +75,8 @@ export class CloudLayer {
     );
     // Overview maps remain readable above the layer, including unlocked far zoom.
     const overview = float(1).sub(smoothstep(256, 512, cameraPosition.y));
-    const above = mix(1, 0.35, smoothstep(HEIGHT, HEIGHT + 48, cameraPosition.y));
+    // Fade before crossing the layer: overhead clouds must not wash out the map or water.
+    const above = float(1).sub(smoothstep(HEIGHT - 16, HEIGHT, cameraPosition.y));
     material.opacityNode = edge.mul(overview).mul(above).mul(0.62);
     const faces = attribute("cloudFaces", "uint");
     material.maskNode = normalWorld.y
@@ -87,6 +89,7 @@ export class CloudLayer {
     this.root = new InstancedMesh(new BoxGeometry(CELL, 4, CELL), material, SIDE * SIDE);
     this.root.geometry.setAttribute("cloudFaces", this.faces);
     this.root.name = "Overworld clouds";
+    this.root.renderOrder = RENDER_ORDER.clouds;
     this.root.instanceMatrix.setUsage(DynamicDrawUsage);
     this.root.frustumCulled = false;
     this.root.count = 0;

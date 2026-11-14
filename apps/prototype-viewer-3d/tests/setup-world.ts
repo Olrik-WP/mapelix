@@ -49,5 +49,22 @@ export default async function setupWorld(): Promise<void> {
       0,
       Array.from({ length: 24 }, () => 1),
     ),
+    ...[4, 5].flatMap((cx) =>
+      [0, 1].flatMap((cz) => [
+        sectionRecord(0, cx, cz, 5, (x, y, z) => {
+          const inside = x >= 66 && x <= 93 && z >= 2 && z <= 29;
+          if (y === 80)
+            return ((x >> 2) + (z >> 2)) % 2 ? "minecraft:red_concrete" : "minecraft:quartz_block";
+          if (y > 80 && y <= 83) return inside ? "minecraft:water" : "minecraft:stone";
+          return "minecraft:air";
+        }),
+        biomeRecord(
+          0,
+          cx,
+          cz,
+          Array.from({ length: 24 }, () => 1),
+        ),
+      ]),
+    ),
   ]);
 }
