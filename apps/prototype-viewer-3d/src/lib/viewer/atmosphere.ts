@@ -143,11 +143,11 @@ export class Atmosphere {
   readonly storm = uniform(0);
   readonly lightning = uniform(0);
 
-  private readonly weatherTint = Fn(([base]: [Node<"vec3">]) =>
-    mix(base, vec3(0.14, 0.18, 0.23), this.rain.mul(0.72))
+  private weatherTint(base: Node<"vec3">) {
+    return mix(base, vec3(0.14, 0.18, 0.23), this.rain.mul(0.72))
       .mul(float(1).sub(this.storm.mul(0.3)))
-      .add(vec3(0.65, 0.73, 0.9).mul(this.lightning)),
-  );
+      .add(vec3(0.65, 0.73, 0.9).mul(this.lightning));
+  }
 
   /** Sky radiance in a world direction. The sun disc is bright enough to bloom. */
   readonly sky = Fn(([direction]: [Node<"vec3">]) => {
