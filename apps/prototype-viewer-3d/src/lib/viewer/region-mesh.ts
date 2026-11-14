@@ -17,6 +17,7 @@ import {
 } from "three/webgpu";
 
 import { QuadCollider } from "./quad-collider";
+import { RENDER_ORDER } from "./render-order";
 import type { MaterialPair, SceneMaterials } from "./shaders/materials";
 
 // Every quad instance reuses one unit square. The shader turns its corners into the face.
@@ -100,18 +101,27 @@ export class RegionMesh {
     const lavaStart = firstLavaQuad(region.opaque);
     this.add(region.opaque.subarray(0, lavaStart), materials.terrain, bounds, {
       castShadow: true,
-      renderOrder: 0,
+      renderOrder: RENDER_ORDER.terrain,
     });
     this.add(region.opaque.subarray(lavaStart), materials.lava, bounds, {
       castShadow: true,
-      renderOrder: 0,
+      renderOrder: RENDER_ORDER.terrain,
     });
     // Grass and flowers do not cast shadows in Minecraft, and skipping them keeps shadows cheap.
-    this.add(region.plants, materials.plants, bounds, { castShadow: false, renderOrder: 1 });
+    this.add(region.plants, materials.plants, bounds, {
+      castShadow: false,
+      renderOrder: RENDER_ORDER.plants,
+    });
     const { water, glass } = splitGlass(region.translucent);
-    this.add(water, materials.water, bounds, { castShadow: false, renderOrder: 2 });
+    this.add(water, materials.water, bounds, {
+      castShadow: false,
+      renderOrder: RENDER_ORDER.water,
+    });
     // Glass draws after all water, so the water behind it shows through.
-    this.add(glass, materials.glass, bounds, { castShadow: false, renderOrder: 3 });
+    this.add(glass, materials.glass, bounds, {
+      castShadow: false,
+      renderOrder: RENDER_ORDER.glass,
+    });
   }
 
   get isEmpty(): boolean {

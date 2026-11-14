@@ -111,7 +111,6 @@ export class CameraRig {
     this.controls.maxPolarAngle = 1.42;
     this.controls.rotateSpeed = 0.55;
     this.controls.zoomSpeed = 1.1;
-    this.controls.addEventListener("start", () => this.takeOver());
 
     // The capture phase runs before the MapControls wheel listener on the same element.
     element.addEventListener("wheel", this.onWheel, { capture: true, passive: false });
@@ -327,14 +326,19 @@ export class CameraRig {
     // Cave navigation may pass through rock. Retargeting onto a nearby wall would
     // repeatedly move the orbit pivot and trap the camera in narrow passages.
     if (this.window !== undefined || this.pinned) return;
-    const { minDistance, maxDistance, target } = this.controls;
+    const { minDistance, target } = this.controls;
     // The camera looks at the orbit point, so moving it along the view ray keeps the view.
     const direction = target.clone().sub(this.camera.position).normalize();
-    const hit = this.terrain.raycast(this.camera.position, direction, maxDistance);
+    const hit = this.terrain.raycast(this.camera.position, direction, this.anchorReach());
     if (hit === undefined) return;
     target
       .copy(this.camera.position)
       .addScaledVector(direction, Math.max(hit.distance, minDistance));
+  }
+
+  /** A local gesture must not replace its pivot with distant terrain on the horizon. */
+  private anchorReach(): number {
+    return Math.min(this.controls.maxDistance, this.distance * 2);
   }
 
   /** Scales the view about a point, so the point stays at the same place on screen. */
@@ -452,7 +456,7 @@ export class CameraRig {
     this.interact("zoom");
     this.takeOver();
     const ray = pointerRay(this.camera, this.element, event.clientX, event.clientY);
-    const hit = this.terrain.raycast(ray.origin, ray.direction, this.camera.far);
+    const hit = this.terrain.raycast(ray.origin, ray.direction, this.anchorReach());
     const anchor =
       hit === undefined ? this.controls.target.clone() : ray.at(hit.distance, new Vector3());
     this.zoomAbout(anchor, WHEEL_ZOOM ** (wheelPixels(event) / 100));
@@ -508,6 +512,9 @@ export class CameraRig {
   private readonly onPointerDown = (event: PointerEvent): void => {
     this.pointers.add(event.pointerId);
     if (!(event.target instanceof Node) || !this.element.contains(event.target)) return;
+    // A plain click cancels a flight without moving either the camera or its pivot.
+    this.flight = undefined;
+    this.settling = false;
     // Compensate MapControls' built-in Shift swap through its public mapping.
     // Ctrl/Meta retain their existing behavior; Shift has no navigation action.
     const swap = event.shiftKey && !event.ctrlKey && !event.metaKey;
@@ -526,6 +533,7 @@ export class CameraRig {
   private readonly onPointerMove = (event: PointerEvent): void => {
     const gesture = this.gesture;
     if (this.enabled && gesture && this.pointers.size > 1 && this.pointers.has(event.pointerId)) {
+      if (!gesture.moved) this.takeOver();
       gesture.moved = true;
       this.interact("zoom");
       return;
@@ -539,6 +547,7 @@ export class CameraRig {
     )
       return;
     gesture.moved = true;
+    this.takeOver();
     this.interact(gesture.action);
   };
 
