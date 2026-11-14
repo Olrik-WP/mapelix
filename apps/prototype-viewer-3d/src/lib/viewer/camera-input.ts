@@ -22,7 +22,10 @@ export class HeldKeys {
   }
 }
 
-/** Blocks/second; zooming out must not turn a missed release into a world-sized jump. */
+/**
+ * Blocks/second for a view this far from the ground. The cap keeps a missed release
+ * from turning into a world-sized jump.
+ */
 export function keyboardSpeed(distance: number, caves: boolean): number {
-  return Math.min(caves ? 32 : 96, Math.max(24, distance * 1.1));
+  return Math.min(caves ? 32 : 160, Math.max(24, distance * 1.1));
 }

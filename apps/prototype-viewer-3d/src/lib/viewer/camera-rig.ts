@@ -344,10 +344,17 @@ export class CameraRig {
   /** Scales the view about a point, so the point stays at the same place on screen. */
   private zoomAbout(anchor: Vector3, factor: number): void {
     const { minDistance, maxDistance, target } = this.controls;
-    const distance = this.distance;
-    const scale = MathUtils.clamp(distance * factor, minDistance, maxDistance) / distance;
+    // A far anchor sets the pace, so a pivot close to the camera cannot stall the zoom.
+    const reach = Math.max(this.distance, this.camera.position.distanceTo(anchor));
+    const scale = MathUtils.clamp(reach * factor, minDistance, maxDistance) / reach;
     this.camera.position.sub(anchor).multiplyScalar(scale).add(anchor);
     target.sub(anchor).multiplyScalar(scale).add(anchor);
+    // Keep the pivot ahead of the camera, on the same view direction.
+    const distance = this.distance;
+    if (distance > 1e-6 && distance < minDistance) {
+      const direction = target.clone().sub(this.camera.position).divideScalar(distance);
+      target.copy(this.camera.position).addScaledVector(direction, minDistance);
+    }
   }
 
   private fly(delta: number): void {
@@ -371,7 +378,12 @@ export class CameraRig {
     forward.y = 0;
     forward.normalize();
     const right = new Vector3().crossVectors(forward, UP);
-    const speed = keyboardSpeed(this.distance, this.window !== undefined) * delta;
+    // Over high terrain the pivot can sit close to the camera; the height above the
+    // ground below restores the pace once the camera is past it.
+    const ground = this.terrain.heightAt(this.camera.position.x, this.camera.position.z);
+    const altitude = ground === undefined ? 0 : this.camera.position.y - ground;
+    const reach = Math.max(this.distance, altitude);
+    const speed = keyboardSpeed(reach, this.window !== undefined) * delta;
     const move = new Vector3();
     if (this.keys.has("KeyW") || this.keys.has("ArrowUp")) move.add(forward);
     if (this.keys.has("KeyS") || this.keys.has("ArrowDown")) move.sub(forward);
@@ -456,7 +468,8 @@ export class CameraRig {
     this.interact("zoom");
     this.takeOver();
     const ray = pointerRay(this.camera, this.element, event.clientX, event.clientY);
-    const hit = this.terrain.raycast(ray.origin, ray.direction, this.anchorReach());
+    // Zoom toward what is under the cursor, however far; only the pivot stays local.
+    const hit = this.terrain.raycast(ray.origin, ray.direction, this.camera.far);
     const anchor =
       hit === undefined ? this.controls.target.clone() : ray.at(hit.distance, new Vector3());
     this.zoomAbout(anchor, WHEEL_ZOOM ** (wheelPixels(event) / 100));

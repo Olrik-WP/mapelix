@@ -607,7 +607,8 @@ test("a missed movement keyup expires and far zoom cannot create runaway keyboar
   const expired = await page.evaluate(() => window.__focusViewer.snapshot().view);
   const travel = Math.hypot(expired.x - before.x, expired.z - before.z);
   expect(travel).toBeGreaterThan(1);
-  expect(travel).toBeLessThanOrEqual(65);
+  // One 600 ms key lease at the 160 blocks/s Surface cap, plus a frame.
+  expect(travel).toBeLessThanOrEqual(110);
   await page.waitForTimeout(300);
   const stopped = await page.evaluate(() => window.__focusViewer.snapshot().view);
   expect(stopped.x).toBeCloseTo(expired.x, 3);
