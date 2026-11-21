@@ -44,6 +44,13 @@ function fakeServer() {
 const get = (path: string, init?: RequestInit) => new Request(`http://local${path}`, init);
 
 describe("scene handler", () => {
+  it("forwards colored-light requests and rejects malformed modes", async () => {
+    const server = fakeServer(),
+      handle = createSceneHandler(server as unknown as SceneServer, "/world");
+    expect((await handle(get("/world/regions/0/0/0?blockLightColors=1")))?.status).toBe(200);
+    expect(server.loadRegion.mock.calls[0]![0]).toMatchObject({ blockLightColors: true });
+    expect((await handle(get("/world/regions/0/0/0?blockLightColors=blue")))?.status).toBe(400);
+  });
   it("serves metadata, regions and discoveries below its base path", async () => {
     const server = fakeServer();
     const handle = createSceneHandler(server as unknown as SceneServer, "/world");

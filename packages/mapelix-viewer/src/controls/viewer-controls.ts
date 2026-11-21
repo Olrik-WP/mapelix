@@ -709,6 +709,8 @@ export class ViewerControls {
     textures.dataset.part = "textures";
     const blockLight = this.check(t.blockLight, (on) => viewer.setBlockLight(on));
     blockLight.dataset.part = "block-light";
+    const lightColors = this.check(t.blockLightColors, (on) => viewer.setBlockLightColors(on));
+    lightColors.dataset.part = "block-light-colors";
     const fps = this.check(t.showFps, (on) => viewer.setShowFps(on));
     fps.dataset.part = "show-fps";
     const leaves = this.check(t.detailedLeaves, (on) => viewer.setLeaves(on ? "detailed" : "fast"));
@@ -722,6 +724,7 @@ export class ViewerControls {
       caves,
       wrapperOf(textures),
       wrapperOf(blockLight),
+      wrapperOf(lightColors),
       wrapperOf(fps),
       wrapperOf(leaves),
       texturesNote,
@@ -1116,6 +1119,12 @@ export class ViewerControls {
       blockLight.disabled = !status.available || status.changing || dimension === undefined;
     }
     const fps = this.part<HTMLInputElement>("show-fps");
+    const lightColors = this.part<HTMLInputElement>("block-light-colors");
+    if (lightColors) {
+      lightColors.checked =
+        dimension !== undefined && settings.blockLightColors?.[dimension] === true;
+      lightColors.disabled = blockLight?.disabled === true || blockLight?.checked !== true;
+    }
     if (fps) fps.checked = settings.showFps;
     const textures = this.part<HTMLInputElement>("textures");
     if (textures) {

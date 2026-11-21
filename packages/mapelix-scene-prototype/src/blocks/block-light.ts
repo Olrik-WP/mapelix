@@ -68,6 +68,25 @@ const set = (value: unknown) => value === 1 || value === true;
 const number = (states: LittleEndianNbtCompoundValue, key: string) =>
   typeof states[key] === "number" ? states[key] : 0;
 
+/** A fixed source family, independent of textures and saved emission intensity. */
+export function blockEmissionColor(name: string): number {
+  const block = name.replace(/^minecraft:/, "");
+  if (block.startsWith("soul_")) return 1;
+  if (["portal", "nether_portal", "crying_obsidian", "respawn_anchor"].includes(block)) return 2;
+  if (["lava", "flowing_lava", "magma"].includes(block)) return 3;
+  if (block.includes("redstone") || block === "powered_repeater" || block === "powered_comparator")
+    return 4;
+  if (["sea_lantern", "conduit"].includes(block)) return 5;
+  if (["end_rod", "beacon", "end_portal", "end_gateway"].includes(block)) return 6;
+  if (block === "verdant_froglight" || block === "sea_pickle") return 7;
+  if (block === "pearlescent_froglight") return 8;
+  if (block === "ochre_froglight" || block === "glowstone") return 9;
+  if (block.includes("amethyst")) return 10;
+  if (block === "glow_lichen") return 11;
+  if (block === "shroomlight") return 12;
+  return 0;
+}
+
 /** Vanilla light levels, 0 through 15. Unknown/custom blocks emit no light. */
 export function blockEmission(name: string, states: LittleEndianNbtCompoundValue): number {
   const block = name.replace(/^minecraft:/, "");

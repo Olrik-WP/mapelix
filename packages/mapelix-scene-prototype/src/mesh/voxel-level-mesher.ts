@@ -134,7 +134,10 @@ class VoxelLevelMesher {
             layers: this.box.layers,
             minLayer: this.low - 15,
             maxLayer: this.high + 16,
-            emission: (index) => this.box.emission![index]!,
+            emission: (index) => this.box.emission![index]! & 15,
+            color: region.blockLightColors
+              ? (index) => this.box.emission![index]! >>> 4
+              : undefined,
             opaque: (index) => this.box.lightOpaque![index] === 1,
           });
   }
@@ -157,6 +160,9 @@ class VoxelLevelMesher {
       plants: empty,
       translucent: this.translucent.finish(),
       ...(blockLight === undefined ? {} : { blockLight }),
+      ...(blockLight !== undefined && this.region.blockLightColors
+        ? { blockLightColors: true }
+        : {}),
     };
   }
 
@@ -365,7 +371,7 @@ class VoxelLevelMesher {
         ((key & KEY_LAVA) !== 0 ? QUAD_LAVA_FLAG | (((key >>> 12) & 15) << 28) : 0),
       color,
       0,
-      (key >>> KEY_BLOCK_LIGHT_SHIFT) & 15,
+      (key >>> KEY_BLOCK_LIGHT_SHIFT) & 255,
     );
     this.minLayer = Math.min(this.minLayer, y);
     this.maxLayer = Math.max(this.maxLayer, y + (isFlatFace(face) ? 1 : height));

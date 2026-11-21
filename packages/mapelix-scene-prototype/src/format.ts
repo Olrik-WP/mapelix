@@ -19,7 +19,8 @@
  * A textured region (header byte 7, bit 0) follows the quads with one more `uint32` per quad,
  * in the same order: the quad's atlas texture (`packQuadTexture` in `textures/atlas-format`),
  * or 0 for a quad drawn with its color. An optional block-light plane (flag bit 1) follows
- * all words: one byte (0..15) per quad, opaque then plants then translucent, in both modes.
+ * all words: one byte per quad, opaque then plants then translucent, in both modes.
+ * Flag bit 2 packs a color family in its high nibble; the low nibble is always level 0..15.
  * Regions without lit faces omit the plane. Geometry words and their alignment are unchanged.
  *
  * Width and height run along the face's two tangent axes. Boxes are measured in
@@ -37,12 +38,15 @@ export const QUAD_MODEL_FLAG = 0x8000_0000;
 export const QUAD_LAVA_FLAG = 1 << 27;
 
 export const REGION_MAGIC = 0x3153_584d; // "MXS1" in little-endian byte order.
-export const REGION_FORMAT_VERSION = 4;
+export { BLOCK_LIGHT_COLORS } from "./block-light-colors.js";
+export const REGION_FORMAT_VERSION = 5;
 export const REGION_HEADER_BYTES = 40;
 /** Header byte 7: the region carries a texture word per quad. */
 export const REGION_FLAG_TEXTURED = 1;
 /** Header byte 7: a byte per quad of block light follows all geometry/texture words. */
 export const REGION_FLAG_BLOCK_LIGHT = 2;
+/** Light bytes pack a 0..15 level in the low nibble and a color family in the high nibble. */
+export const REGION_FLAG_BLOCK_LIGHT_COLORS = 4;
 /** Height map value for a cell without any stored blocks. */
 export const EMPTY_HEIGHT = -32768;
 /** Lowest overworld block. Quads store their cell y minus `WORLD_MIN_Y` in nine bits. */
@@ -313,7 +317,7 @@ export function finishBlockLight(
   };
 }
 
-/** One block-light level (0..15) per quad, with or without textures. */
+/** One light byte per quad: level 0..15, optionally with a high-nibble color family. */
 export interface RegionBlockLight {
   readonly opaque: Uint8Array;
   readonly plants: Uint8Array;
@@ -344,6 +348,8 @@ export interface SceneRegion {
   readonly textures?: RegionTextures;
   /** Absent when all faces receive zero block light or the region is a distant LOD. */
   readonly blockLight?: RegionBlockLight;
+  /** Optional color families in the existing light byte plane. */
+  readonly blockLightColors?: boolean;
 }
 
 /** A decoded region whose typed arrays view the original bytes without copying. */
@@ -386,7 +392,11 @@ export function encodeSceneRegion(region: SceneRegion): Uint8Array {
     for (const layer of ["opaque", "plants", "translucent"] as const) {
       if (blockLight[layer].length * 3 !== region[layer].length)
         throw new RangeError("A lit region needs one block-light byte per quad");
-      if (blockLight[layer].some((level) => level > 15))
+      if (
+        blockLight[layer].some((level) =>
+          region.blockLightColors ? level !== 0 && (level & 15) === 0 : level > 15,
+        )
+      )
         throw new RangeError("Block light must be in 0..15");
     }
   }
@@ -401,7 +411,8 @@ export function encodeSceneRegion(region: SceneRegion): Uint8Array {
   view.setUint8(
     7,
     (textures === undefined ? 0 : REGION_FLAG_TEXTURED) |
-      (blockLight === undefined ? 0 : REGION_FLAG_BLOCK_LIGHT),
+      (blockLight === undefined ? 0 : REGION_FLAG_BLOCK_LIGHT) |
+      (blockLight !== undefined && region.blockLightColors ? REGION_FLAG_BLOCK_LIGHT_COLORS : 0),
   );
   view.setInt32(8, region.x, true);
   view.setInt32(12, region.z, true);
@@ -449,10 +460,15 @@ export function decodeSceneRegion(bytes: Uint8Array): DecodedSceneRegion {
 
   const level = view.getUint8(6);
   const flags = view.getUint8(7);
-  if ((flags & ~(REGION_FLAG_TEXTURED | REGION_FLAG_BLOCK_LIGHT)) !== 0)
+  if (
+    (flags & ~(REGION_FLAG_TEXTURED | REGION_FLAG_BLOCK_LIGHT | REGION_FLAG_BLOCK_LIGHT_COLORS)) !==
+    0
+  )
     throw new Error(`Unknown scene region flags ${flags}`);
   const textured = (flags & REGION_FLAG_TEXTURED) !== 0;
   const lit = (flags & REGION_FLAG_BLOCK_LIGHT) !== 0;
+  const colors = (flags & REGION_FLAG_BLOCK_LIGHT_COLORS) !== 0;
+  if (colors && !lit) throw new Error("Colored block light needs a light plane");
   const x = view.getInt32(8, true);
   const z = view.getInt32(12, true);
   const gridSize = regionGridSize(level);
@@ -494,7 +510,8 @@ export function decodeSceneRegion(bytes: Uint8Array): DecodedSceneRegion {
   const takeLight = (count: number): Uint8Array => {
     const levels = new Uint8Array(bytes.buffer, offset, count);
     offset += count;
-    if (levels.some((level) => level > 15)) throw new Error("Invalid block-light level");
+    if (levels.some((level) => (colors ? level !== 0 && (level & 15) === 0 : level > 15)))
+      throw new Error("Invalid block-light level");
     return levels;
   };
   const blockLight = lit
@@ -521,6 +538,7 @@ export function decodeSceneRegion(bytes: Uint8Array): DecodedSceneRegion {
     translucent,
     ...(textures === undefined ? {} : { textures }),
     ...(blockLight === undefined ? {} : { blockLight }),
+    ...(colors ? { blockLightColors: true } : {}),
   };
 }
 

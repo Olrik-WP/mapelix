@@ -1,5 +1,10 @@
 # Block light
 
+The current binary format is **5**. Optional dominant-source colors keep the
+same one-byte light plane; the scalar layout below also remains available.
+See [source light colors](colored-block-lighting.md) for flags, GPU cost,
+per-dimension settings and current paired measurements. No smoothing is enabled.
+
 LOD 0 and 1 carry baked block light in Surface and Caves, with or without a texture
 stack. Torches, lanterns, lava, glowstone, campfires, candles and other known vanilla
 sources illuminate nearby faces. Saved states distinguish lit and extinguished
@@ -27,7 +32,7 @@ LOD 1 preserves source emission and light opacity before reducing appearances to
 cubic voxels, so small sources and their states survive there. LOD 2–5 retain
 their previous geometry and self-emission and allocate no block-light field.
 
-## Region format 4
+## Scalar layout, introduced in region format 4
 
 The 40-byte header, height grid and three geometry words per quad are unchanged.
 Texture words still follow geometry when header byte 7 bit 0 is set. New bit 1
@@ -54,7 +59,7 @@ cost 6,113 bytes (+7.49% / +5.76%); an extra word would cost 24,452 bytes
 (+29.97% / +23.06%). Texture-only packing would cost no bytes when textured but
 cannot cover plain regions, whose texture stream is absent.
 
-Version-3 readers reject version 4. Upgrade the scene server and browser bundle
+Earlier readers reject the current format 5. Upgrade the scene server and browser bundle
 together. The engine fingerprint includes the format and changed mesher code,
 so new metadata names a new revision and cache identity. Request paths, query
 parameters, metadata fields and embed API version 5 are unchanged. Hosts that
@@ -115,8 +120,8 @@ colors remain distinct, and even white terrain stays below display clipping.
 Nether portals emit level 11. A framed portal regression checks levels 10 through
 6 on both sides at LOD 0/1, including zero texture words, and the longer light path
 around opaque obsidian. The quadratic response makes this light weaker than
-level-15 lanterns; this version uses the same warm fill for every source, without
-a separate violet halo.
+level-15 lanterns. The original mode uses warm fill for every source; the optional
+source-color mode now projects violet portal light with the same intensity curve.
 
 [Measurements](benchmarks/block-lighting-2026-11-18.json) compare the same read-only
 copied snapshot against `f3ab898`, alternating seven builds per version, discarding

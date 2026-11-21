@@ -38,6 +38,7 @@ import {
 export interface StreamingOptions {
   /** False requests lighter LOD 0/1 geometry rather than hiding illumination in a shader. */
   readonly blockLight?: boolean;
+  readonly blockLightColors?: boolean;
   readonly context: SceneContextInput;
   readonly revision: string;
   readonly regionBase?: string;
@@ -589,6 +590,8 @@ export class RegionStreamer {
     const params = contextSearch(this.context);
     params.set("revision", this.options.revision);
     if (this.options.blockLight === false && target.level <= 1) params.set("blockLight", "0");
+    else if (this.options.blockLightColors === true && target.level <= 1)
+      params.set("blockLightColors", "1");
     const textures = target.textured === true ? this.textures : undefined;
     if (textures !== undefined) {
       params.set("textures", textures.revision);

@@ -76,8 +76,12 @@ export function meshRegionVolume(
   geometry: GeometryMode = "surface",
   cutout = false,
   blockLight = true,
+  blockLightColors = false,
 ): SceneRegion {
-  return new VoxelMesher(volume, palette, geometry, cutout, blockLight).mesh(regionX, regionZ);
+  return new VoxelMesher(volume, palette, geometry, cutout, blockLight, blockLightColors).mesh(
+    regionX,
+    regionZ,
+  );
 }
 
 class VoxelMesher {
@@ -114,6 +118,7 @@ class VoxelMesher {
   private readonly cutoutCubes: boolean;
   /** Whether faces take the light of the blocks around them; off builds lighter regions. */
   private readonly blockLight: boolean;
+  private readonly blockLightColors: boolean;
 
   constructor(
     volume: RegionVolume,
@@ -121,8 +126,10 @@ class VoxelMesher {
     geometry: GeometryMode,
     cutout: boolean,
     blockLight: boolean,
+    blockLightColors: boolean,
   ) {
     this.blockLight = blockLight;
+    this.blockLightColors = blockLightColors;
     this.geometry = geometry;
     this.cutout = palette.textures !== undefined ? palette.cutout : undefined;
     this.cutoutCubes = cutout;
@@ -157,6 +164,9 @@ class VoxelMesher {
             minLayer: this.low - this.baseY - 15,
             maxLayer: this.high - this.baseY + 16,
             emission: (index) => this.palette.emission[this.cells[index]! & PALETTE_ID_MASK]!,
+            color: this.blockLightColors
+              ? (index) => this.palette.emissionColor[this.cells[index]! & PALETTE_ID_MASK]!
+              : undefined,
             opaque: (index) => this.palette.isOpaque(this.cells[index]! & PALETTE_ID_MASK),
           })
         : undefined;
@@ -177,6 +187,7 @@ class VoxelMesher {
       plants: this.plants.finish(),
       translucent: this.translucent.finish(),
       ...(blockLight === undefined ? {} : { blockLight }),
+      ...(blockLight !== undefined && this.blockLightColors ? { blockLightColors: true } : {}),
     };
     if (opaqueTextures === undefined) return region;
     return {
@@ -466,7 +477,7 @@ class VoxelMesher {
         ((key & KEY_LAVA) !== 0 ? QUAD_LAVA_FLAG | (((key >>> 12) & 15) << 28) : 0),
       color,
       texture,
-      (key >>> KEY_BLOCK_LIGHT_SHIFT) & 15,
+      (key >>> KEY_BLOCK_LIGHT_SHIFT) & 255,
     );
     this.minY = Math.min(this.minY, y);
     this.maxY = Math.max(this.maxY, y + (isFlatFace(face) ? 1 : height));

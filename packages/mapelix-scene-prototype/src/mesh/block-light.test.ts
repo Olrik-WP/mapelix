@@ -54,3 +54,33 @@ it("does not wrap a row or layer at volume boundaries", () => {
     buildBlockLight({ width: 2, layers: 1, emission: () => 0, opaque: () => false }),
   ).toBeUndefined();
 });
+
+it("carries the strongest source color in one byte without changing any light level", () => {
+  const source = {
+    width: 33,
+    layers: 1,
+    emission: (i: number) => (i === 16 * 33 + 12 ? 15 : i === 16 * 33 + 20 ? 10 : 0),
+    opaque: () => false,
+  };
+  const plain = buildBlockLight(source)!;
+  const colored = buildBlockLight({ ...source, color: (i) => (i === 16 * 33 + 12 ? 3 : 1) })!;
+  expect(colored.byteLength).toBe(plain.byteLength);
+  expect(colored.map((v) => v & 15)).toEqual(plain);
+  expect(colored[16 * 33 + 13]).toBe((3 << 4) | 14);
+  expect(colored[16 * 33 + 24]).toBe((1 << 4) | 6);
+});
+
+it("settles equal-strength colors consistently before propagating the next level", () => {
+  const colors = [1, 3];
+  for (const reverse of [false, true]) {
+    const light = buildBlockLight({
+      width: 11,
+      layers: 1,
+      emission: (i) => (i === 5 * 11 + 3 || i === 5 * 11 + 7 ? 7 : 0),
+      color: (i) => colors[(i === 5 * 11 + 3 ? 0 : 1) ^ Number(reverse)]!,
+      opaque: () => false,
+    })!;
+    expect(light[5 * 11 + 5]).toBe((1 << 4) | 5);
+    expect(light[4 * 11 + 5]).toBe((1 << 4) | 4);
+  }
+});

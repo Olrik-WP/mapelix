@@ -63,7 +63,9 @@ export const texturedQuadPosition = Fn(() => {
   // A variable, so `quadPosition` and its own lava flow and sprite assignments come first.
   const position = quadPosition().toVar();
   const texture = uint(attribute("texture", "uint"));
-  textureWord.assign(texture.bitAnd(uint(0x7807ffff)));
+  textureWord.assign(
+    texture.bitAnd(uint(0x0007ffff)).bitOr(quadPackedData.bitAnd(uint(0x7f800000))),
+  );
   If(bit(uint(attribute("quad", "uvec3").x), 23, 7).lessThan(6), () => {
     textureOffset.assign(bit(texture, 19, 0xff));
   });

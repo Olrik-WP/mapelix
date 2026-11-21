@@ -251,7 +251,16 @@ async function regionResponse(
   const lightParam = url.searchParams.get("blockLight");
   if (lightParam !== null && lightParam !== "0" && lightParam !== "1")
     return failure(400, "blockLight must be 0 or 1");
-  const position = { level, x, z, ...(lightParam === "0" ? { blockLight: false } : {}) };
+  const colorParam = url.searchParams.get("blockLightColors");
+  if (colorParam !== null && colorParam !== "0" && colorParam !== "1")
+    return failure(400, "blockLightColors must be 0 or 1");
+  const position = {
+    level,
+    x,
+    z,
+    ...(lightParam === "0" ? { blockLight: false } : {}),
+    ...(colorParam === "1" ? { blockLightColors: true } : {}),
+  };
   if (textures !== null) {
     if (!/^[0-9a-f]{20}$/.test(textures)) return failure(400, "Invalid texture revision");
     if (level !== 0) return failure(400, "Textured regions are level 0 only");

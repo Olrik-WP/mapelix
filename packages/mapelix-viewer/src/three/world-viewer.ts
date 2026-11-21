@@ -107,6 +107,8 @@ export type { AutoPerspective, ViewProjection } from "./view-projection";
 export interface WorldViewerOptions {
   /** Baked block illumination per dimension (default enabled everywhere). */
   readonly blockLight?: BlockLightSettings;
+  /** Dominant-source light colors per dimension (default disabled). */
+  readonly blockLightColors?: BlockLightSettings;
   /** Animated block clouds in Overworld Surface views (default true). */
   readonly clouds?: boolean;
   /** Cosmetic Overworld Surface weather only, independent of the server (default clear). */
@@ -266,6 +268,7 @@ export class WorldViewer {
   private projectionProgress = 1;
   private textureMode: TextureMode = "off";
   private blockLight: BlockLightSettings = {};
+  private blockLightColors: BlockLightSettings = {};
   private leafMode: LeafMode = "fast";
   private textureState: TextureState = "off";
   private textureFade: TextureFade = DEFAULT_TEXTURE_FADE;
@@ -293,6 +296,7 @@ export class WorldViewer {
     if (this.context.mode === "caves") this.caveThickness = this.context.maxY - this.context.minY;
     this.options = options;
     this.blockLight = { ...options.blockLight };
+    this.blockLightColors = { ...options.blockLightColors };
     this.depthFollow = new DepthFollow(
       options.loadDepth,
       (next) => {
@@ -613,6 +617,7 @@ export class WorldViewer {
       context: this.context,
       revision: world.revision,
       blockLight: this.blockLight[world.dimension] !== false,
+      blockLightColors: this.blockLightColors[world.dimension] === true,
       ...(this.options.regionBase === undefined ? {} : { regionBase: this.options.regionBase }),
       ...(this.options.regionSuffix === undefined
         ? {}
@@ -643,6 +648,23 @@ export class WorldViewer {
     const previous = this.blockLight[dimension] !== false;
     this.blockLight = { ...this.blockLight, [dimension]: enabled };
     if (previous === enabled || dimension !== this.context.dimension) return;
+    this.reloadLighting();
+  }
+
+  setBlockLightColors(enabled: boolean, dimension: Dimension = this.context.dimension): void {
+    if (typeof enabled !== "boolean" || !Object.hasOwn(DIMENSIONS, dimension))
+      throw new RangeError("Block light colors need a boolean and a vanilla dimension");
+    const previous = this.blockLightColors[dimension] === true;
+    this.blockLightColors = { ...this.blockLightColors, [dimension]: enabled };
+    if (
+      previous !== enabled &&
+      dimension === this.context.dimension &&
+      this.blockLight[dimension] !== false
+    )
+      this.reloadLighting();
+  }
+
+  private reloadLighting(): void {
     this.scene.remove(this.streamer.root);
     this.streamer.dispose();
     this.streamer = this.createStreamer(this.world);

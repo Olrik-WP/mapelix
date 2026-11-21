@@ -76,6 +76,7 @@ export interface WorldSource {
     | "onSelectionChange"
     | "textures"
     | "blockLight"
+    | "blockLightColors"
     | "leaves"
     | "textureBase"
     | "onTextureState"
@@ -88,6 +89,8 @@ export interface WorldSettings {
   readonly showFps: boolean;
   /** Missing dimensions keep baked block illumination enabled. */
   readonly blockLight: BlockLightSettings;
+  /** Missing dimensions retain the original warm block light. */
+  readonly blockLightColors?: BlockLightSettings;
   /** Surface or a vertical cave slice; caves open the 3D world. */
   readonly viewMode: "surface" | "caves";
   /** Lowest Y of the cave slice, a multiple of 16. */
@@ -115,6 +118,7 @@ export interface WorldSettings {
 export const DEFAULT_WORLD_SETTINGS: WorldSettings = {
   showFps: false,
   blockLight: {},
+  blockLightColors: {},
   viewMode: "surface",
   caveMinY: 0,
   caveThickness: CAVE_LIMITS.defaultThickness,
@@ -293,6 +297,7 @@ export class MapelixViewer {
       ...DEFAULT_WORLD_SETTINGS,
       ...options.settings,
       blockLight: { ...options.settings?.blockLight },
+      blockLightColors: { ...options.settings?.blockLightColors },
     };
     if (getComputedStyle(element).position === "static") element.style.position = "relative";
     this.mapLayer = this.layer();
@@ -548,6 +553,18 @@ export class MapelixViewer {
     if (typeof enabled !== "boolean") throw new RangeError("Block light must be a boolean");
     this.updateSettings({ blockLight: { ...this.settingsNow.blockLight, [dimension]: enabled } });
     this.worldViewer?.setBlockLight(enabled, dimension);
+  }
+
+  setBlockLightColors(
+    enabled: boolean,
+    dimension: Dimension = parseDimension(this.worldDimension()),
+  ): void {
+    parseDimension(dimension);
+    if (typeof enabled !== "boolean") throw new RangeError("Block light colors must be a boolean");
+    this.updateSettings({
+      blockLightColors: { ...this.settingsNow.blockLightColors, [dimension]: enabled },
+    });
+    this.worldViewer?.setBlockLightColors(enabled, dimension);
   }
 
   setTimeOfDay(hour: number): void {
@@ -1090,6 +1107,7 @@ export class MapelixViewer {
           weather: this.settingsNow.weather,
           textures: this.settingsNow.textures,
           blockLight: this.settingsNow.blockLight,
+          blockLightColors: this.settingsNow.blockLightColors ?? {},
           leaves: this.settingsNow.leaves,
           textureBase: `${source.base}/textures`,
           onTextureState: () => this.publish(),

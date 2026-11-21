@@ -37,13 +37,15 @@ export const quadSprite = varyingProperty("float", "vQuadSprite");
 export const quadCovered = varyingProperty("float", "vQuadCovered");
 /** Quad size in blocks along its second tangent, which is height for side faces. */
 export const quadHeight = varyingProperty("float", "vQuadHeight");
-/** Per-face integer data: flow/texture in bits 0..18, light in 27..30. Integer varyings
+/** Per-face integer data: flow/texture in 0..18, source color in 23..26, light in 27..30. Integer varyings
  * are flat on WebGPU and WebGL 2, so interpolation cannot corrupt texture flags. */
 export const quadPackedData = varyingProperty("uint", "vQuadLavaFlow");
 /** Horizontal lava flow direction (0 = convection, 1..8 = compass octants). */
 export const quadLavaFlow = float(quadPackedData.bitAnd(uint(15)));
 /** One block-light value per face, normalized to 0..1; shares the existing varying. */
 export const quadBlockLight = float(quadPackedData.shiftRight(uint(27)).bitAnd(uint(15))).div(15);
+/** Color-family bits share the existing flat varying, outside the texture flags. */
+export const quadBlockLightColor = quadPackedData.shiftRight(uint(23)).bitAnd(uint(15));
 
 const bits = (word: Node<"uint">, shift: number, mask: number) =>
   float(word.shiftRight(uint(shift)).bitAnd(uint(mask)));
@@ -135,11 +137,15 @@ export const quadPosition = Fn((builder) => {
   const data = builder.geometry.hasAttribute("texture")
     ? uint(attribute("texture", "uint"))
     : uint(0);
+  const light = builder.geometry.hasAttribute("light")
+    ? uint(attribute("light", "uint"))
+    : data.shiftRight(uint(27)).bitAnd(uint(15));
   quadPackedData.assign(
     word1
       .shiftRight(uint(28))
       .bitAnd(uint(15))
-      .bitOr(data.bitAnd(uint(0x78000000))),
+      .bitOr(light.bitAnd(uint(15)).shiftLeft(uint(27)))
+      .bitOr(light.shiftRight(uint(4)).bitAnd(uint(15)).shiftLeft(uint(23))),
   );
 
   return select(plant, crossPosition, boxPosition);

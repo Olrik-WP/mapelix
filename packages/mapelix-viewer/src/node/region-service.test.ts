@@ -73,6 +73,40 @@ const signal = (): AbortSignal => new AbortController().signal;
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("RegionService", () => {
+  it("isolates warm, colored and unlit caches while sharing distant geometry", async () => {
+    const builder = controlledBuilder(),
+      store = memoryStore(),
+      regions = service(builder.build, store);
+    for (const request of [
+      { level: 0, x: 0, z: 0 },
+      { level: 0, x: 0, z: 0, blockLightColors: true },
+      { level: 0, x: 0, z: 0, blockLight: false, blockLightColors: true },
+    ]) {
+      const result = regions.load("overworld", request, signal());
+      await tick();
+      builder.pending.at(-1)!.resolve();
+      await result;
+    }
+    expect(builder.pending.map((p) => p.request.blockLightColors)).toEqual([
+      undefined,
+      true,
+      undefined,
+    ]);
+    expect([...store.files.keys()].some((key) => key.startsWith("colored/"))).toBe(true);
+    expect([...store.files.keys()].some((key) => key.startsWith("unlit/"))).toBe(true);
+    expect(
+      (await regions.load("overworld", { level: 0, x: 0, z: 0, blockLightColors: true }, signal()))
+        .cacheStatus,
+    ).toBe("memory");
+    const far = regions.load("overworld", { level: 2, x: 0, z: 0 }, signal());
+    await tick();
+    builder.pending.at(-1)!.resolve();
+    await far;
+    expect(
+      (await regions.load("overworld", { level: 2, x: 0, z: 0, blockLightColors: true }, signal()))
+        .cacheStatus,
+    ).toBe("memory");
+  });
   it("answers regions outside the world with an empty region and no build", async () => {
     const builder = controlledBuilder();
     const regions = service(builder.build);

@@ -106,6 +106,19 @@ describe("Prewarmer", () => {
 });
 
 describe("prewarmPlan block light modes", () => {
+  it("prepares colored near variants without multiplying distant jobs", () => {
+    const warm = prewarmPlan(WORLD, 1000),
+      all = prewarmPlan(WORLD, 1000, [true, false, "colored"]);
+    expect(all.filter((job) => job.blockLightColors).length).toBe(
+      warm.filter((job) => job.level <= 1).length,
+    );
+    expect(all.filter((job) => job.level > 1)).toEqual(warm.filter((job) => job.level > 1));
+    expect(
+      all
+        .filter((job) => job.blockLightColors)
+        .every((job) => job.level <= 1 && job.blockLight !== false),
+    ).toBe(true);
+  });
   it("adds unlit variants of the near levels only", () => {
     const lit = prewarmPlan(WORLD, 1000);
     const both = prewarmPlan(WORLD, 1000, [true, false]);

@@ -13,6 +13,7 @@ const DEEP_ROCK = rgb(118, 116, 112);
  * `voxelSize` blocks wide, and the region itself is `span` voxels across.
  */
 export interface VoxelRegion {
+  readonly blockLightColors?: boolean;
   readonly window?: VerticalBounds;
   readonly level: number;
   readonly x: number;
@@ -45,6 +46,7 @@ export function buildVoxelRegion(
   ceilingY?: number,
   window?: VerticalBounds,
   blockLight = true,
+  blockLightColors = false,
 ): VoxelRegion | undefined {
   const voxelSize = regionCellSize(level);
   const span = regionGridSize(level);
@@ -68,6 +70,7 @@ export function buildVoxelRegion(
         ceilingY,
         window,
         level === 1 && blockLight,
+        blockLightColors,
       );
       if (chunk === undefined) continue;
       regionHasChunks ||=
@@ -109,6 +112,7 @@ export function buildVoxelRegion(
     low,
     box,
     explored,
+    ...(level === 1 && blockLight && blockLightColors ? { blockLightColors: true } : {}),
     ...(window === undefined ? {} : { window }),
   };
 }
