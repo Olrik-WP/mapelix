@@ -43,6 +43,10 @@
         result.weather = stored.weather;
       if (typeof stored.autoDepth === "boolean") result.autoDepth = stored.autoDepth;
       if (typeof stored.showFps === "boolean") result.showFps = stored.showFps;
+      if (typeof stored.mobileMode === "boolean") result.mobileMode = stored.mobileMode;
+      if (stored.mobilePixelRatio === 1 || stored.mobilePixelRatio === 1.25)
+        result.mobilePixelRatio = stored.mobilePixelRatio;
+      if (typeof stored.showMarkers === "boolean") result.showMarkers = stored.showMarkers;
       for (const key of ["blockLight", "blockLightColors", "blockLightSmooth"] as const) {
         if (stored[key] === null || typeof stored[key] !== "object") continue;
         const modes = stored[key] as Record<string, unknown>;
@@ -99,7 +103,11 @@
           dimension,
           view: start.view,
           projection: start.projection,
-          settings: { ...storedPreferences(), ...start.settings },
+          settings: {
+            mobileMode: matchMedia("(pointer: coarse)").matches,
+            ...storedPreferences(),
+            ...start.settings,
+          },
           label: "World map",
           markerTexts,
           ...(data.world ? { world: { base: "/world" } } : {}),
@@ -142,6 +150,9 @@
             weather: settings.weather,
             autoDepth: settings.autoDepth,
             showFps: settings.showFps,
+            mobileMode: settings.mobileMode,
+            mobilePixelRatio: settings.mobilePixelRatio,
+            showMarkers: settings.showMarkers,
             blockLight: settings.blockLight,
             blockLightColors: settings.blockLightColors,
             blockLightSmooth: settings.blockLightSmooth,

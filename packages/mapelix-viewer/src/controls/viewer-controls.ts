@@ -727,6 +727,22 @@ export class ViewerControls {
     lightSmooth.dataset.part = "block-light-smooth";
     const fps = this.check(t.showFps, (on) => viewer.setShowFps(on));
     fps.dataset.part = "show-fps";
+    const mobile = this.check(t.mobileMode ?? "Mobile rendering", (on) => viewer.setMobileMode(on));
+    mobile.dataset.part = "mobile-mode";
+    const mobileField = make("label", "mx-field", t.mobileResolution ?? "Mobile resolution");
+    const mobileRatio = make("select");
+    mobileRatio.dataset.part = "mobile-ratio";
+    for (const value of [1.25, 1]) {
+      const option = make("option", undefined, `${value}×`);
+      option.value = String(value);
+      mobileRatio.append(option);
+    }
+    mobileRatio.addEventListener("change", () =>
+      viewer.setMobilePixelRatio(mobileRatio.value === "1" ? 1 : 1.25),
+    );
+    mobileField.append(mobileRatio);
+    const markers = this.check(t.showMarkers ?? "Show markers", (on) => viewer.setShowMarkers(on));
+    markers.dataset.part = "show-markers";
     const leaves = this.check(t.detailedLeaves, (on) => viewer.setLeaves(on ? "detailed" : "fast"));
     leaves.dataset.part = "leaves";
     const texturesNote = make("p", undefined);
@@ -742,6 +758,9 @@ export class ViewerControls {
       wrapperOf(lightColors),
       wrapperOf(lightSmooth),
       wrapperOf(fps),
+      wrapperOf(mobile),
+      mobileField,
+      wrapperOf(markers),
       wrapperOf(leaves),
       texturesNote,
     );
@@ -1066,6 +1085,19 @@ export class ViewerControls {
   }
 
   private renderSettings(view: ViewState, status: WorldStatus, settings: WorldSettings): void {
+    const mobile = this.part<HTMLInputElement>("mobile-mode");
+    if (mobile) {
+      mobile.checked = settings.mobileMode === true;
+      mobile.disabled = status.changing;
+    }
+    const mobileRatio = this.part<HTMLSelectElement>("mobile-ratio");
+    if (mobileRatio) {
+      mobileRatio.value = String(settings.mobilePixelRatio ?? 1.25);
+      mobileRatio.disabled = status.changing;
+      show(mobileRatio.parentElement ?? undefined, settings.mobileMode === true);
+    }
+    const markers = this.part<HTMLInputElement>("show-markers");
+    if (markers) markers.checked = settings.showMarkers !== false;
     const t = this.t;
     this.panelTitle.textContent = t.world(status.name);
     const context = status.context;

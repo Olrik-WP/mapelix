@@ -101,6 +101,8 @@ export interface MarkerHost {
   ) => boolean;
   /** Terrain height in 3D, or undefined. */
   readonly heightAt: (x: number, z: number) => number | undefined;
+  /** Stable identity of the world/context supplying the terrain heights. */
+  readonly heightContext?: () => unknown;
   /** Zooms in on a world point, in either mode. */
   readonly zoomToward: (x: number, z: number) => void;
   /** Whether a pointer press landed on the map or the 3D view. */
@@ -161,9 +163,8 @@ const MAX_LABELS = 64;
 const TAP_SLOP = 10;
 /** Shorter than a long press (500 ms), so a long press is never also a tap. */
 const TAP_MS = 450;
-const FALLBACK_Y = 64;
-const HEIGHT_REFRESH = 60;
-const HEIGHT_RETRY = 20;
+const HEIGHT_REFRESH = 250;
+const HEIGHT_RETRY = 100;
 const POOL_SIZE = 64;
 
 function dimensionName(value: unknown): string {
@@ -258,7 +259,8 @@ export class MarkerLayer implements Markers {
   private ys = new Float64Array(256);
   private refs: Stored[] = [];
   private readonly point = { x: 0, y: 0 };
-  private frame = 0;
+  private heightContext: unknown;
+  private visible = true;
   private request = 0;
   private readonly resize: ResizeObserver;
   private press: { id: number; x: number; y: number; time: number; multi: boolean } | undefined;
@@ -333,7 +335,10 @@ export class MarkerLayer implements Markers {
         y: marker.y === undefined ? undefined : marker.y + 0.5,
         z: marker.z + 0.5,
         height:
-          before !== undefined && before.marker.x === marker.x && before.marker.z === marker.z
+          before !== undefined &&
+          before.marker.dimension === marker.dimension &&
+          before.marker.x === marker.x &&
+          before.marker.z === marker.z
             ? before.height
             : undefined,
         heightNext: 0,
@@ -401,6 +406,19 @@ export class MarkerLayer implements Markers {
     this.schedule();
   }
 
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    this.root.hidden = !visible;
+    if (visible) {
+      for (const entry of this.stored.values()) entry.heightNext = 0;
+      this.schedule();
+    } else {
+      this.statsNow.visible = 0;
+      this.statsNow.clusters = 0;
+      this.statsNow.labels = 0;
+    }
+  }
+
   markerAt(clientX: number, clientY: number): Marker | undefined {
     return this.itemAt(clientX, clientY)?.marker?.marker;
   }
@@ -435,9 +453,16 @@ export class MarkerLayer implements Markers {
 
   /** Places every item for the current view; the viewer calls it after each drawn frame. */
   redraw(): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.visible) return;
     const start = performance.now();
-    this.frame += 1;
+    const context = this.host.heightContext?.();
+    if (context !== this.heightContext) {
+      this.heightContext = context;
+      for (const entry of this.stored.values()) {
+        entry.height = undefined;
+        entry.heightNext = 0;
+      }
+    }
     if (this.sortNeeded) this.sort();
     const mode = this.host.mode();
     const dimension = this.host.dimension();
@@ -455,7 +480,11 @@ export class MarkerLayer implements Markers {
       if (marker.dimension !== dimension) continue;
       if (marker.group !== undefined && this.hidden.has(marker.group)) continue;
       let y = 0;
-      if (mode === "3d") y = entry.y ?? this.terrainY(entry);
+      if (mode === "3d") {
+        const terrain = entry.y ?? this.terrainY(entry, start);
+        if (terrain === undefined) continue;
+        y = terrain;
+      }
       if (!this.host.project(entry.x, y, entry.z, width, height, this.point)) continue;
       const px = this.point.x,
         py = this.point.y;
@@ -483,15 +512,15 @@ export class MarkerLayer implements Markers {
   }
 
   /** Terrain height under a marker, read again now and then (each read walks the regions). */
-  private terrainY(entry: Stored): number {
-    if (this.frame >= entry.heightNext) {
+  private terrainY(entry: Stored, now: number): number | undefined {
+    if (now >= entry.heightNext) {
       const height = this.host.heightAt(Math.floor(entry.x), Math.floor(entry.z));
-      if (height !== undefined) entry.height = height;
-      // Spread the reads over frames; a column not drawn yet is tried again sooner.
+      entry.height = height;
+      // Use elapsed time so low frame rates do not retain a stale altitude for seconds.
       entry.heightNext =
-        this.frame + (height === undefined ? HEIGHT_RETRY : HEIGHT_REFRESH) + (entry.order % 8);
+        now + (height === undefined ? HEIGHT_RETRY : HEIGHT_REFRESH) + (entry.order % 8) * 8;
     }
-    return entry.height === undefined ? FALLBACK_Y : entry.height + 1;
+    return entry.height === undefined ? undefined : entry.height + 1;
   }
 
   private draw(clusters: ScreenCluster[], refs: Stored[], width: number, height: number): void {
@@ -746,6 +775,7 @@ export class MarkerLayer implements Markers {
   };
 
   private itemAt(clientX: number, clientY: number): Item | undefined {
+    if (!this.visible) return undefined;
     const bounds = this.element.getBoundingClientRect();
     const x = clientX - bounds.left,
       y = clientY - bounds.top;

@@ -56,6 +56,9 @@ export interface ControlTexts {
   readonly blockLightColors: string;
   readonly blockLightSmooth: string;
   readonly showFps: string;
+  readonly mobileMode?: string;
+  readonly mobileResolution?: string;
+  readonly showMarkers?: string;
   readonly frameRate: (fps: number | undefined) => string;
   readonly texturesUnavailable: string;
   readonly detailedLeaves: string;
@@ -148,6 +151,9 @@ export const DEFAULT_CONTROL_TEXTS: ControlTexts = {
   blockLightColors: "Source light colors",
   blockLightSmooth: "Smooth block lighting",
   showFps: "Show FPS",
+  mobileMode: "Mobile rendering",
+  mobileResolution: "Mobile resolution",
+  showMarkers: "Show markers",
   frameRate: (fps) => `${fps && Number.isFinite(fps) ? Math.round(fps) : "—"} FPS`,
   texturesUnavailable: "This world has no block textures.",
   detailedLeaves: "Detailed leaves",
