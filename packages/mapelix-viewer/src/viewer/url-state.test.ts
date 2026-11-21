@@ -1,6 +1,47 @@
 import { expect, it } from "vitest";
 import { DEFAULT_WORLD_SETTINGS, type MapelixViewer } from "./mapelix-viewer.js";
 import { startFromSearch, viewerSearch } from "./url-state.js";
+import { renderProfileSettings } from "./render-profile.js";
+
+it("round-trips LOW/HD without independent geometry flags or changes to sky and FPS", () => {
+  for (const profile of ["low", "hd"] as const) {
+    const settings = {
+      ...DEFAULT_WORLD_SETTINGS,
+      ...renderProfileSettings(profile),
+      renderProfile: profile,
+      hour: 23,
+      weather: "thunderstorm" as const,
+      showFps: true,
+    };
+    const viewer = {
+      settings,
+      view: { dimension: "nether", x: 0, z: 0, pixelsPerBlock: 12, projection: "isometric" },
+    } as unknown as MapelixViewer;
+    const search = viewerSearch(viewer);
+    expect(search.get("profile")).toBe(profile);
+    for (const name of [
+      "textures",
+      "leaves",
+      "noBlockLight",
+      "blockLightColors",
+      "blockLightSmooth",
+    ])
+      expect(search.has(name)).toBe(false);
+    expect(startFromSearch(search).settings).toMatchObject({
+      ...renderProfileSettings(profile),
+      renderProfile: profile,
+      hour: 23,
+      weather: "thunderstorm",
+      showFps: true,
+    });
+  }
+  expect(
+    startFromSearch(new URLSearchParams("profile=other")).settings.renderProfile,
+  ).toBeUndefined();
+  expect(
+    startFromSearch(new URLSearchParams("profile=low&textures=1&blockLightColors=nether")).settings,
+  ).toMatchObject(renderProfileSettings("low"));
+});
 
 it("keeps smoothing off by default and independent per dimension", () => {
   expect(DEFAULT_WORLD_SETTINGS.blockLightSmooth).toEqual({});

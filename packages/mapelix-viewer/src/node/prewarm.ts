@@ -91,6 +91,27 @@ export function prewarmPlan(
   return jobs;
 }
 
+/** The complete LOW/HD matrix, sharing distant regions and one total job cap. */
+export function profilePrewarmPlan(
+  dimensions: ReadonlyMap<Dimension, BlockBounds | undefined>,
+  maxRegions: number,
+): { regions: PrewarmJob[]; textures: PrewarmJob[] } {
+  const regions: PrewarmJob[] = [];
+  const textures: PrewarmJob[] = [];
+  for (const job of prewarmPlan(dimensions, maxRegions)) {
+    const hd = { ...job, blockLightColors: true, blockLightSmooth: true };
+    const cost = job.level === 0 ? 3 : job.level === 1 ? 2 : 1;
+    // Keep all variants of a coordinate together, without exceeding the existing cap.
+    if (regions.length + textures.length + cost > maxRegions) break;
+    if (job.level > 1) regions.push(job);
+    else {
+      regions.push({ ...job, blockLight: false }, hd);
+      if (job.level === 0) textures.push({ ...hd, cutout: true });
+    }
+  }
+  return { regions, textures };
+}
+
 /**
  * Builds the plan one region at a time through the normal cache, so a visitor's
  * request waits behind at most one prewarm build. Regions already on disk are

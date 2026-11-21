@@ -51,6 +51,7 @@ export interface ControlTexts {
   readonly atmosphereOnly: string;
   readonly clouds: string;
   readonly textures: string;
+  readonly renderProfile?: string;
   readonly blockLight: string;
   readonly blockLightColors: string;
   readonly blockLightSmooth: string;
@@ -142,6 +143,7 @@ export const DEFAULT_CONTROL_TEXTS: ControlTexts = {
   atmosphereOnly: "Weather and time apply to the Overworld surface in 3D.",
   clouds: "Clouds",
   textures: "Block textures",
+  renderProfile: "Rendering",
   blockLight: "Block lighting",
   blockLightColors: "Source light colors",
   blockLightSmooth: "Smooth block lighting",

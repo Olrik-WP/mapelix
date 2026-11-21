@@ -7,6 +7,7 @@ import { type Dimension } from "@mapelix/scene-prototype/dimensions";
 import type { MapView } from "../map/tile-math.js";
 import type { MapelixViewer, WorldSettings } from "./mapelix-viewer.js";
 import type { Projection } from "./view-state.js";
+import { renderProfileSettings } from "./render-profile.js";
 
 /** Viewer options read back from an address: give them to `new MapelixViewer`. */
 export interface SearchStart {
@@ -26,7 +27,8 @@ const DIMENSIONS: readonly Dimension[] = ["overworld", "nether", "the-end"];
 /**
  * The view and settings as address parameters: `dimension`, `x`, `z`, `scale` (CSS pixels per
  * block), `projection`, `view=caves` with `minY` and `thickness`, `ceilingY` (Nether), `hour`,
- * `weather`, `clouds=0`, `textures=1`, `leaves=detailed`, `autoDepth=0`, the discovery filters and the cave area.
+ * `weather`, `clouds=0`, `profile=low|hd` or individual rendering flags, `autoDepth=0`,
+ * the discovery filters and the cave area.
  */
 export function viewerSearch(viewer: MapelixViewer): URLSearchParams {
   const view = viewer.view;
@@ -48,14 +50,21 @@ export function viewerSearch(viewer: MapelixViewer): URLSearchParams {
   if (settings.weather !== "clear") params.set("weather", settings.weather);
   if (!settings.clouds) params.set("clouds", "0");
   if (settings.showFps) params.set("fps", "1");
-  const unlit = DIMENSIONS.filter((dimension) => settings.blockLight[dimension] === false);
-  if (unlit.length) params.set("noBlockLight", unlit.join(","));
-  const colored = DIMENSIONS.filter((dimension) => settings.blockLightColors?.[dimension] === true);
-  if (colored.length) params.set("blockLightColors", colored.join(","));
-  const smooth = DIMENSIONS.filter((dimension) => settings.blockLightSmooth?.[dimension] === true);
-  if (smooth.length) params.set("blockLightSmooth", smooth.join(","));
-  if (settings.textures === "on") params.set("textures", "1");
-  if (settings.leaves === "detailed") params.set("leaves", "detailed");
+  if (settings.renderProfile !== undefined) params.set("profile", settings.renderProfile);
+  else {
+    const unlit = DIMENSIONS.filter((dimension) => settings.blockLight[dimension] === false);
+    if (unlit.length) params.set("noBlockLight", unlit.join(","));
+    const colored = DIMENSIONS.filter(
+      (dimension) => settings.blockLightColors?.[dimension] === true,
+    );
+    if (colored.length) params.set("blockLightColors", colored.join(","));
+    const smooth = DIMENSIONS.filter(
+      (dimension) => settings.blockLightSmooth?.[dimension] === true,
+    );
+    if (smooth.length) params.set("blockLightSmooth", smooth.join(","));
+    if (settings.textures === "on") params.set("textures", "1");
+    if (settings.leaves === "detailed") params.set("leaves", "detailed");
+  }
   if (!settings.autoDepth) params.set("autoDepth", "0");
   for (const [name, value] of discoveryFilterSearch(settings.discoveries)) params.set(name, value);
   if (settings.selection)
@@ -105,6 +114,9 @@ export function startFromSearch(params: URLSearchParams): SearchStart {
       DIMENSIONS.map((dimension) => [dimension, colored.split(",").includes(dimension)]),
     );
   if (params.get("leaves") === "detailed") settings.leaves = "detailed";
+  const profile = params.get("profile");
+  if (profile === "low" || profile === "hd")
+    Object.assign(settings, renderProfileSettings(profile), { renderProfile: profile });
   if (params.get("autoDepth") === "0") settings.autoDepth = false;
   try {
     const filters = discoveryFiltersFromSearch(params);

@@ -1,7 +1,7 @@
 import type { Dimension } from "@mapelix/scene-prototype";
 import { describe, expect, it } from "vitest";
 
-import { Prewarmer, prewarmPlan, type PrewarmTarget } from "./prewarm.js";
+import { Prewarmer, prewarmPlan, profilePrewarmPlan, type PrewarmTarget } from "./prewarm.js";
 import { OverloadedError, emptyRegionBytes } from "./region-service.js";
 
 const WORLD = new Map<
@@ -13,6 +13,29 @@ const WORLD = new Map<
 ]);
 
 describe("prewarmPlan", () => {
+  it("prepares exactly the LOW/HD matrix, with detailed textured leaves only", () => {
+    const area = new Map<Dimension, { minX: number; minZ: number; maxX: number; maxZ: number }>([
+      ["overworld", { minX: 0, minZ: 0, maxX: 15, maxZ: 15 }],
+    ]);
+    const plan = profilePrewarmPlan(area, 1000);
+    const at = (level: number) => ({ dimension: "overworld", level, x: 0, z: 0 });
+    expect(plan.regions).toEqual([
+      ...[5, 4, 3, 2].map(at),
+      { ...at(1), blockLight: false },
+      { ...at(1), blockLightColors: true, blockLightSmooth: true },
+      { ...at(0), blockLight: false },
+      { ...at(0), blockLightColors: true, blockLightSmooth: true },
+    ]);
+    expect(plan.textures).toEqual([
+      { ...at(0), blockLightColors: true, blockLightSmooth: true, cutout: true },
+    ]);
+    // A cap includes textured work and never leaves a partial profile group.
+    const capped = profilePrewarmPlan(area, 8);
+    expect(capped.regions).toHaveLength(6);
+    expect(capped.textures).toEqual([]);
+    expect(profilePrewarmPlan(area, 9)).toEqual(plan);
+  });
+
   it("covers the stored area, coarse levels first, middle first", () => {
     const plan = prewarmPlan(WORLD, 1000);
     expect(plan[0]).toMatchObject({ level: 5, dimension: "overworld" });

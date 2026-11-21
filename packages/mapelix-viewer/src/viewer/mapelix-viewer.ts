@@ -29,6 +29,7 @@ import type { DiscoveryStats } from "../three/discovery-streamer.js";
 import type { SelectionTool } from "../three/selection-box.js";
 import type { AutoPerspective } from "../three/view-projection.js";
 import type { WeatherMode } from "../three/weather-layer.js";
+import { renderProfileSettings, type RenderProfile } from "./render-profile.js";
 import type {
   BlockLightSettings,
   LeafMode,
@@ -78,6 +79,7 @@ export interface WorldSource {
     | "blockLight"
     | "blockLightColors"
     | "blockLightSmooth"
+    | "renderProfile"
     | "leaves"
     | "textureBase"
     | "onTextureState"
@@ -86,6 +88,8 @@ export interface WorldSource {
 
 /** What the 3D world shows. Kept while the map is on screen and applied when the world shows. */
 export interface WorldSettings {
+  /** Optional LOW/HD controls. Individual rendering setters leave this mode. */
+  readonly renderProfile?: RenderProfile | undefined;
   /** Show the 3D frame-rate readout in the default controls (default false). */
   readonly showFps: boolean;
   /** Missing dimensions keep baked block illumination enabled. */
@@ -303,6 +307,9 @@ export class MapelixViewer {
       blockLight: { ...options.settings?.blockLight },
       blockLightColors: { ...options.settings?.blockLightColors },
       blockLightSmooth: { ...options.settings?.blockLightSmooth },
+      ...(options.settings?.renderProfile === undefined
+        ? {}
+        : renderProfileSettings(options.settings.renderProfile)),
     };
     if (getComputedStyle(element).position === "static") element.style.position = "relative";
     this.mapLayer = this.layer();
@@ -549,6 +556,13 @@ export class MapelixViewer {
     this.updateSettings({ showFps: enabled });
   }
 
+  /** Changes textures, lighting and leaves together in every dimension. */
+  setRenderProfile(profile: RenderProfile): void {
+    const settings = renderProfileSettings(profile);
+    this.updateSettings({ ...settings, renderProfile: profile });
+    this.worldViewer?.setRenderProfile(profile);
+  }
+
   /** Chooses lighter near-region geometry for one dimension; other dimensions retain their setting. */
   setBlockLight(
     enabled: boolean,
@@ -556,7 +570,10 @@ export class MapelixViewer {
   ): void {
     parseDimension(dimension);
     if (typeof enabled !== "boolean") throw new RangeError("Block light must be a boolean");
-    this.updateSettings({ blockLight: { ...this.settingsNow.blockLight, [dimension]: enabled } });
+    this.updateSettings({
+      renderProfile: undefined,
+      blockLight: { ...this.settingsNow.blockLight, [dimension]: enabled },
+    });
     this.worldViewer?.setBlockLight(enabled, dimension);
   }
 
@@ -567,6 +584,7 @@ export class MapelixViewer {
     parseDimension(dimension);
     if (typeof enabled !== "boolean") throw new RangeError("Block light colors must be a boolean");
     this.updateSettings({
+      renderProfile: undefined,
       blockLightColors: { ...this.settingsNow.blockLightColors, [dimension]: enabled },
     });
     this.worldViewer?.setBlockLightColors(enabled, dimension);
@@ -579,6 +597,7 @@ export class MapelixViewer {
     parseDimension(dimension);
     if (typeof enabled !== "boolean") throw new RangeError("Smooth block light must be a boolean");
     this.updateSettings({
+      renderProfile: undefined,
       blockLightSmooth: { ...this.settingsNow.blockLightSmooth, [dimension]: enabled },
     });
     this.worldViewer?.setBlockLightSmooth(enabled, dimension);
@@ -599,7 +618,7 @@ export class MapelixViewer {
   setTextures(mode: TextureMode): void {
     if (mode !== "off" && mode !== "on")
       throw new RangeError(`Unknown texture mode ${String(mode)}`);
-    this.updateSettings({ textures: mode });
+    this.updateSettings({ textures: mode, renderProfile: undefined });
     this.worldViewer?.setTextures(mode);
   }
 
@@ -607,7 +626,7 @@ export class MapelixViewer {
   setLeaves(mode: LeafMode): void {
     if (mode !== "fast" && mode !== "detailed")
       throw new RangeError(`Unknown leaf mode ${String(mode)}`);
-    this.updateSettings({ leaves: mode });
+    this.updateSettings({ leaves: mode, renderProfile: undefined });
     this.worldViewer?.setLeaves(mode);
   }
 
