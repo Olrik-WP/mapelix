@@ -14,6 +14,11 @@ export function renderPixelRatio(
   return Math.min(deviceRatio, mobile ? mobilePixelRatio(cap) : 1.75);
 }
 
+/** Coarsen mobile terrain at both output ratios without changing desktop detail. */
+export function renderDetailScale(pixelRatio: number, mobile: boolean): number {
+  return mobile ? 2 * Math.max(1, pixelRatio) : 1;
+}
+
 /** Keep the focus ahead of the edge fade, including wide isometric views. */
 export function mobileViewDistance(requested: number, focusDistance: number): number {
   return Math.min(requested, Math.max(1024, focusDistance / 0.65));

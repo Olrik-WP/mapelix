@@ -180,11 +180,13 @@ accepts the same fields. Desktop retains its existing 1.75 maximum pixel ratio.
 Mobile rendering caps the automatic view reach at 1024 blocks when the focus
 distance permits; wider views retain enough reach to keep the focus before the
 edge fade. Existing explicit `setRenderDistance()` limits remain respected.
-Mobile LOD targets use a one-CSS-pixel geometry budget at both ratios: choosing
-1.25 keeps the sharper drawing buffer without also increasing terrain detail.
-The existing LOD targets are scaled on resize; texture fade distances retain
-their CSS-pixel meaning. Desktop LOD selection is unchanged. There are no new
-region variants, format changes or prewarm jobs.
+Mobile LOD pixel targets are twice the existing thresholds, using simpler
+terrain earlier even at ratio 1. At both ratios the CSS-pixel thresholds are 4.4
+for coarse voxels and 8.8 for individual blocks; choosing 1.25 sharpens the drawing
+buffer without adding terrain detail. Thresholds are precomputed on resize;
+texture fade distances retain their CSS-pixel meaning. View reach and desktop
+LOD selection are unchanged. There are no new region variants, format changes
+or prewarm jobs.
 
 `WorldSettings.showMarkers` defaults to `true`; `MapelixViewer.setShowMarkers()`
 shows or hides stored markers in both 2D and 3D without deleting them. Automatic

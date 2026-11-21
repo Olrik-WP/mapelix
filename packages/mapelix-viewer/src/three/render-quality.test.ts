@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mobilePixelRatio, mobileViewDistance, renderPixelRatio } from "./render-quality";
+import {
+  mobilePixelRatio,
+  mobileViewDistance,
+  renderDetailScale,
+  renderPixelRatio,
+} from "./render-quality";
 
 describe("independent mobile rendering budget", () => {
   it("retains desktop resolution and avoids supersampling low-density screens", () => {
@@ -18,5 +23,12 @@ describe("independent mobile rendering budget", () => {
     const far = mobileViewDistance(6000, 3000);
     expect(far).toBeLessThan(6000);
     expect(3000).toBeLessThan(far * 0.7);
+  });
+  it("reduces mobile geometry at ratio 1 while keeping desktop detail unchanged", () => {
+    expect(renderDetailScale(1, true)).toBe(2);
+    expect(renderDetailScale(1.25, true) / 1.25).toBe(renderDetailScale(1, true));
+    expect(renderDetailScale(0.8, true)).toBe(2);
+    expect(renderDetailScale(1, false)).toBe(1);
+    expect(renderDetailScale(1.75, false)).toBe(1);
   });
 });
