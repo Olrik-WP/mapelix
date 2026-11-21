@@ -178,14 +178,19 @@ accepts the same fields. Desktop retains its existing 1.75 maximum pixel ratio.
 Mobile rendering caps the automatic view reach at 1024 blocks when the focus
 distance permits; wider views retain enough reach to keep the focus before the
 edge fade. Existing explicit `setRenderDistance()` limits remain respected.
-Lower drawing resolution also selects existing coarse LODs earlier. There are
-no new region variants, format changes or prewarm jobs.
+Mobile LOD targets use a one-CSS-pixel geometry budget at both ratios: choosing
+1.25 keeps the sharper drawing buffer without also increasing terrain detail.
+The existing LOD targets are scaled on resize; texture fade distances retain
+their CSS-pixel meaning. Desktop LOD selection is unchanged. There are no new
+region variants, format changes or prewarm jobs.
 
 `WorldSettings.showMarkers` defaults to `true`; `MapelixViewer.setShowMarkers()`
 shows or hides stored markers in both 2D and 3D without deleting them. Automatic
 marker altitudes follow drawn terrain rather than hidden cached detail; markers
 without an explicit Y wait until terrain is available. Height refreshes use
 elapsed time, so low frame rates do not retain old altitudes for seconds.
+The 3D canvas fills its container in CSS pixels independently of its backing
+buffer size, keeping marker projection and pointer rays aligned at every DPR.
 
 URL helpers support `mobile=1`, `mobileRatio=1|1.25`, and `markers=0`.
 The demo initially enables mobile rendering for coarse-pointer devices, with

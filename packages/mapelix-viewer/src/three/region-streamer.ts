@@ -168,6 +168,8 @@ export class RegionStreamer {
   private projectionBlend = 0;
   private focusDistance = 1;
   private viewDistance: number;
+  private voxelPixels: number;
+  private blockPixels: number;
   private disposed = false;
   private readonly context;
   private readonly maxLevel: number;
@@ -231,12 +233,22 @@ export class RegionStreamer {
     this.context = sceneContext(options.context.dimension, options.context);
     this.maxLevel = this.context.mode === "caves" ? CAVE_LIMITS.maxLevel : MAX_REGION_LEVEL;
     this.viewDistance = options.viewDistance;
+    this.voxelPixels = options.voxelPixels;
+    this.blockPixels = options.blockPixels;
     this.root.matrixAutoUpdate = false;
   }
 
   /** Changes how far regions are requested, for example when the camera zooms out. */
   setViewDistance(distance: number): void {
     this.viewDistance = distance;
+  }
+
+  /** Changes the existing LOD pixel targets without changing texture fade or cache keys. */
+  setDetailScale(scale: number): void {
+    if (!Number.isFinite(scale) || scale <= 0)
+      throw new RangeError("Detail scale must be positive");
+    this.voxelPixels = this.options.voxelPixels * scale;
+    this.blockPixels = this.options.blockPixels * scale;
   }
 
   setSelection(selection: HorizontalSelection | undefined): void {
@@ -696,7 +708,7 @@ export class RegionStreamer {
   private refines(target: RegionNode, distance: number): boolean {
     if (this.projectionBlend <= 0) return distance < this.refineDistance(target.level);
     if (!this.frustum.intersectsBox(this.nodeBox(target))) return false;
-    const pixels = target.level === 1 ? this.options.blockPixels : this.options.voxelPixels;
+    const pixels = target.level === 1 ? this.blockPixels : this.voxelPixels;
     return (
       projectedPixels(
         regionCellSize(target.level),
@@ -710,7 +722,7 @@ export class RegionStreamer {
 
   /** Distance at which a node's cells would draw larger than the pixel target. */
   private refineDistance(level: number): number {
-    const pixels = level === 1 ? this.options.blockPixels : this.options.voxelPixels;
+    const pixels = level === 1 ? this.blockPixels : this.voxelPixels;
     return (regionCellSize(level) * this.pixelsPerBlock) / pixels;
   }
 
