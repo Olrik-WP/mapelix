@@ -103,6 +103,8 @@ export class CameraRig {
     | { id: number; x: number; y: number; action: CameraInteraction; moved: boolean }
     | undefined;
   private pinned = false;
+  /** Surface elevation can leave the focus in the air, beyond the usual local terrain ray. */
+  private surfaceAnchorPending = false;
 
   constructor(
     camera: PerspectiveCamera,
@@ -181,6 +183,7 @@ export class CameraRig {
     this.pinned = pinned;
     this.controls.minDistance = pinned ? 1.5 : Math.min(6, Math.max(1.5, this.distance));
     if (pinned) {
+      this.surfaceAnchorPending = false;
       this.flight = undefined;
       this.settling = false;
     }
@@ -204,6 +207,7 @@ export class CameraRig {
     );
     this.flight = undefined;
     this.settling = options.settle && this.window === undefined;
+    this.surfaceAnchorPending = false;
     const y = this.window
       ? MathUtils.clamp(view.y, this.window.minY, this.window.maxY - 1)
       : view.y;
@@ -236,6 +240,7 @@ export class CameraRig {
   setVerticalWindow(window: VerticalBounds | undefined, preserveMovement = false): void {
     if (!preserveMovement) this.stopMovement();
     this.window = window;
+    this.surfaceAnchorPending = false;
     if (window !== undefined) this.settling = false;
     this.setZoomUnlocked(this.zoomUnlocked);
   }
@@ -245,6 +250,7 @@ export class CameraRig {
     const fromTarget = this.controls.target.clone();
     const toTarget = new Vector3(x, this.terrain.heightAt(x, z) ?? fromTarget.y, z);
     const travel = fromTarget.distanceTo(toTarget);
+    this.surfaceAnchorPending = false;
     this.settling = false;
     this.flight = {
       fromTarget,
@@ -377,6 +383,7 @@ export class CameraRig {
       this.isometric ? hit.distance : Math.max(hit.distance, minDistance),
       this.isometric,
     );
+    this.surfaceAnchorPending = false;
   }
 
   /**
@@ -390,6 +397,9 @@ export class CameraRig {
 
   /** A local gesture must not replace its pivot with distant terrain on the horizon. */
   private anchorReach(): number {
+    // Space/C move both camera and focus. The next gesture must be able to find the ground
+    // farther along the same view, without casting extra rays during vertical movement.
+    if (this.surfaceAnchorPending) return this.controls.maxDistance;
     return Math.min(this.controls.maxDistance, this.distance * 2);
   }
 
@@ -443,6 +453,7 @@ export class CameraRig {
     this.interact("pan");
     let step = vertical * this.keyboardSpeed() * delta;
     if (this.window === undefined) step = this.surfaceStep(step);
+    if (this.window === undefined && step !== 0) this.surfaceAnchorPending = true;
     this.controls.target.y += step;
     this.camera.position.y += step;
   }

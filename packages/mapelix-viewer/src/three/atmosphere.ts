@@ -168,7 +168,12 @@ export class Atmosphere {
     // After dusk, stars and a pale moon opposite the sun fade in.
     const night = float(1).sub(this.daylight).pow(2);
     const cell = direction.mul(360).floor();
-    const star = hash(cell.x.add(cell.y.mul(113)).add(cell.z.mul(769)));
+    // hash converts its seed to uint: keep every sky direction nonnegative before that cast.
+    const seed = cell.x
+      .add(cell.y.mul(113))
+      .add(cell.z.mul(769))
+      .add(360 * (1 + 113 + 769));
+    const star = hash(seed);
     const stars = smoothstep(0.9975, 1, star).mul(3).mul(up.mul(4).clamp(0, 1));
     const toMoon = max(dot(direction, this.sunDirection.negate()), 0);
     const moon = smoothstep(0.99965, 0.9998, toMoon).mul(2.2).add(toMoon.pow(40).mul(0.12));
