@@ -29,6 +29,7 @@ export {
 } from "./viewer/view-state.js";
 export { startFromSearch, viewerSearch, type SearchStart } from "./viewer/url-state.js";
 export type { RenderProfile } from "./viewer/render-profile.js";
+export type { MobilePixelRatio } from "./three/render-quality.js";
 export type {
   BlockLightSettings,
   LeafMode,

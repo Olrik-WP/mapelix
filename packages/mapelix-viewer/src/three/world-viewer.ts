@@ -58,6 +58,12 @@ import {
 } from "./shaders/materials";
 import { DEFAULT_TEXTURE_FADE, TextureLook, type TextureFade } from "./shaders/textured";
 import { BlockAtlas } from "./block-atlas";
+import {
+  mobilePixelRatio,
+  mobileViewDistance,
+  renderPixelRatio,
+  type MobilePixelRatio,
+} from "./render-quality.js";
 import { renderProfileSettings, type RenderProfile } from "../viewer/render-profile.js";
 import {
   CAVE_LIMITS,
@@ -99,6 +105,7 @@ export type TextureState = "off" | "unavailable" | "loading" | "on" | "failed";
 
 export type { TextureFade } from "./shaders/textured";
 export type { RenderProfile } from "../viewer/render-profile.js";
+export type { MobilePixelRatio } from "./render-quality.js";
 
 export type { CameraView, VerticalMovement } from "./camera-rig";
 export type { DiscoveryDetailText } from "./discovery-focus";
@@ -107,6 +114,10 @@ export type { AutoPerspective, ViewProjection } from "./view-projection";
 
 /** Kept across view switches so embedding does not fall back to a different server. */
 export interface WorldViewerOptions {
+  /** Opt-in mobile rendering budget, independent of LOW/HD (default false). */
+  readonly mobileMode?: boolean;
+  /** Device pixel ratio cap in mobile mode (default 1.25; 1 for comparison). */
+  readonly mobilePixelRatio?: MobilePixelRatio;
   /** Apply LOW or HD together, overriding the individual rendering options. */
   readonly renderProfile?: RenderProfile;
   /** Baked block illumination per dimension (default enabled everywhere). */
@@ -210,7 +221,6 @@ export interface Pointed {
 const SHADOW_MAP_SIZE = 4096;
 /** Half the width of the sun's shadow map when zoomed far out, in blocks. */
 const MAX_SHADOW_EXTENT = 2048;
-const MAX_PIXEL_RATIO = 1.75;
 /** Farthest the view grows on its own as the camera zooms out, in blocks. */
 const AUTO_VIEW_LIMIT = 32_768;
 
@@ -259,6 +269,8 @@ export class WorldViewer {
   private regionsChanged = true;
   /** A fixed render distance in blocks, or undefined to follow the zoom. */
   private renderDistance: number | undefined;
+  private mobileMode = false;
+  private mobileRatio: MobilePixelRatio = 1.25;
   private frames = 0;
   private readonly frameListeners = new Set<() => void>();
   private screenWidth = 1;
@@ -304,6 +316,8 @@ export class WorldViewer {
     this.context = sceneContext(world.dimension, world);
     if (this.context.mode === "caves") this.caveThickness = this.context.maxY - this.context.minY;
     this.options = options;
+    this.mobileMode = options.mobileMode ?? false;
+    this.mobileRatio = mobilePixelRatio(options.mobilePixelRatio ?? 1.25);
     this.blockLight = { ...options.blockLight };
     this.blockLightColors = { ...options.blockLightColors };
     this.blockLightSmooth = { ...options.blockLightSmooth };
@@ -445,6 +459,9 @@ export class WorldViewer {
     start: Partial<CameraView> = {},
     options: WorldViewerOptions = {},
   ): Promise<WorldViewer> {
+    if (options.mobileMode !== undefined && typeof options.mobileMode !== "boolean")
+      throw new RangeError("Mobile mode must be a boolean");
+    mobilePixelRatio(options.mobilePixelRatio ?? 1.25);
     if (options.weather !== undefined) weatherMode(options.weather);
     if (options.textures !== undefined && options.textures !== "off" && options.textures !== "on")
       throw new RangeError(`Unknown texture mode ${String(options.textures)}`);
@@ -869,6 +886,25 @@ export class WorldViewer {
     this.regionsChanged = true;
   }
 
+  /** Changes only client resolution and view budget; keeps region/cache identities. */
+  setMobileMode(enabled: boolean): void {
+    if (typeof enabled !== "boolean") throw new RangeError("Mobile mode must be a boolean");
+    if (this.mobileMode === enabled) return;
+    this.mobileMode = enabled;
+    this.resize();
+    this.fitViewDistance();
+    this.regionsChanged = true;
+  }
+
+  setMobilePixelRatio(ratio: MobilePixelRatio): void {
+    mobilePixelRatio(ratio);
+    if (this.mobileRatio === ratio) return;
+    this.mobileRatio = ratio;
+    if (!this.mobileMode) return;
+    this.resize();
+    this.regionsChanged = true;
+  }
+
   /** Lets the camera zoom out far past the usual limit, with the view growing to match. */
   setZoomUnlocked(unlocked: boolean): void {
     this.rig.setZoomUnlocked(unlocked);
@@ -1108,7 +1144,7 @@ export class WorldViewer {
 
   /** Y of the highest drawn block in a column, finest loaded detail first; `undefined` where nothing is drawn. Read only. */
   surfaceHeightAt(x: number, z: number): number | undefined {
-    return this.streamer.exactHeightAt(x, z) ?? this.streamer.heightAt(x, z);
+    return this.streamer.heightAt(x, z);
   }
 
   /** The block under a canvas position: the first loaded surface along the pointer ray. */
@@ -1222,9 +1258,10 @@ export class WorldViewer {
       this.options.caveViewDistance ?? CAVE_LIMITS.viewDistance,
       CAVE_LIMITS.viewDistance,
     );
-    const reach = caves
+    const requestedReach = caves
       ? Math.min(this.renderDistance ?? caveReach, caveReach)
       : (this.renderDistance ?? distance);
+    const reach = this.mobileMode ? mobileViewDistance(requestedReach, zoom) : requestedReach;
     this.streamer.setViewDistance(reach);
     this.atmosphere.viewDistance.value = reach;
     this.atmosphere.hazeDistance.value = caves
@@ -1316,7 +1353,9 @@ export class WorldViewer {
   private resize(): void {
     const width = Math.max(1, this.container.clientWidth);
     const height = Math.max(1, this.container.clientHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
+    this.renderer.setPixelRatio(
+      renderPixelRatio(window.devicePixelRatio, this.mobileMode, this.mobileRatio),
+    );
     this.renderer.setSize(width, height, false);
     this.screenWidth = width;
     this.screenHeight = height;

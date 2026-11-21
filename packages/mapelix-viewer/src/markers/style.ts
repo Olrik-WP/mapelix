@@ -16,6 +16,7 @@ export const MARKER_STYLE = `
   contain: strict;
   z-index: 5;
 }
+.mx-markers[hidden] { display: none !important; }
 @media (prefers-color-scheme: light) {
   .mx-markers {
     --mx-marker-label-bg: rgb(252 253 255 / 0.94);

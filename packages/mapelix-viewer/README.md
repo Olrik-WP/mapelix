@@ -170,6 +170,28 @@ const response = (await world(request)) ?? (await tiles(request)) ?? notFound();
 
 ### Optional LOW/HD profiles
 
+Mobile rendering is independent of these profiles. `WorldSettings.mobileMode`
+(default `false`) enables a client-only budget with `mobilePixelRatio: 1.25`
+(default, or `1` for comparison). `MapelixViewer` and `WorldViewer` expose
+`setMobileMode(boolean)` and `setMobilePixelRatio(1 | 1.25)`; `WorldViewerOptions`
+accepts the same fields. Desktop retains its existing 1.75 maximum pixel ratio.
+Mobile rendering caps the automatic view reach at 1024 blocks when the focus
+distance permits; wider views retain enough reach to keep the focus before the
+edge fade. Existing explicit `setRenderDistance()` limits remain respected.
+Lower drawing resolution also selects existing coarse LODs earlier. There are
+no new region variants, format changes or prewarm jobs.
+
+`WorldSettings.showMarkers` defaults to `true`; `MapelixViewer.setShowMarkers()`
+shows or hides stored markers in both 2D and 3D without deleting them. Automatic
+marker altitudes follow drawn terrain rather than hidden cached detail; markers
+without an explicit Y wait until terrain is available. Height refreshes use
+elapsed time, so low frame rates do not retain old altitudes for seconds.
+
+URL helpers support `mobile=1`, `mobileRatio=1|1.25`, and `markers=0`.
+The demo initially enables mobile rendering for coarse-pointer devices, with
+stored preferences and explicit URL settings taking precedence. Embedders choose
+when to enable it; the engine does not detect devices automatically.
+
 Use `settings: { renderProfile: "low" }` (or `"hd"`) with `MapelixViewer`, then
 `viewer.setRenderProfile("hd")`. `WorldViewer` also accepts `renderProfile` and
 `setRenderProfile()`. The default controls show only a LOW/HD selector for rendering

@@ -3,6 +3,38 @@ import { DEFAULT_WORLD_SETTINGS, type MapelixViewer } from "./mapelix-viewer.js"
 import { startFromSearch, viewerSearch } from "./url-state.js";
 import { renderProfileSettings } from "./render-profile.js";
 
+it("keeps mobile rendering and marker visibility independent of LOW/HD", () => {
+  for (const profile of ["low", "hd"] as const) {
+    const settings = {
+      ...DEFAULT_WORLD_SETTINGS,
+      ...renderProfileSettings(profile),
+      renderProfile: profile,
+      mobileMode: true,
+      mobilePixelRatio: 1 as const,
+      showMarkers: false,
+    };
+    const viewer = {
+      settings,
+      view: { dimension: "overworld", x: 0, z: 0, pixelsPerBlock: 12, projection: "isometric" },
+    } as unknown as MapelixViewer;
+    expect(startFromSearch(viewerSearch(viewer)).settings).toMatchObject({
+      renderProfile: profile,
+      mobileMode: true,
+      mobilePixelRatio: 1,
+      showMarkers: false,
+      ...renderProfileSettings(profile),
+    });
+  }
+  expect(DEFAULT_WORLD_SETTINGS).toMatchObject({
+    mobileMode: false,
+    mobilePixelRatio: 1.25,
+    showMarkers: true,
+  });
+  expect(
+    startFromSearch(new URLSearchParams("mobile=0&mobileRatio=3&markers=1")).settings,
+  ).toMatchObject({ mobileMode: false, showMarkers: true });
+});
+
 it("round-trips LOW/HD without independent geometry flags or changes to sky and FPS", () => {
   for (const profile of ["low", "hd"] as const) {
     const settings = {

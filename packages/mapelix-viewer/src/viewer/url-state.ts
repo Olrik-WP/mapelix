@@ -28,7 +28,7 @@ const DIMENSIONS: readonly Dimension[] = ["overworld", "nether", "the-end"];
  * The view and settings as address parameters: `dimension`, `x`, `z`, `scale` (CSS pixels per
  * block), `projection`, `view=caves` with `minY` and `thickness`, `ceilingY` (Nether), `hour`,
  * `weather`, `clouds=0`, `profile=low|hd` or individual rendering flags, `autoDepth=0`,
- * the discovery filters and the cave area.
+ * `mobile=1`, `mobileRatio=1|1.25`, `markers=0`, the discovery filters and the cave area.
  */
 export function viewerSearch(viewer: MapelixViewer): URLSearchParams {
   const view = viewer.view;
@@ -50,6 +50,9 @@ export function viewerSearch(viewer: MapelixViewer): URLSearchParams {
   if (settings.weather !== "clear") params.set("weather", settings.weather);
   if (!settings.clouds) params.set("clouds", "0");
   if (settings.showFps) params.set("fps", "1");
+  if (settings.mobileMode) params.set("mobile", "1");
+  if (settings.mobilePixelRatio === 1) params.set("mobileRatio", "1");
+  if (settings.showMarkers === false) params.set("markers", "0");
   if (settings.renderProfile !== undefined) params.set("profile", settings.renderProfile);
   else {
     const unlit = DIMENSIONS.filter((dimension) => settings.blockLight[dimension] === false);
@@ -97,6 +100,12 @@ export function startFromSearch(params: URLSearchParams): SearchStart {
   if (params.get("clouds") === "0") settings.clouds = false;
   if (params.get("fps") === "1" || params.get("fps") === "0")
     settings.showFps = params.get("fps") === "1";
+  if (params.get("mobile") === "1" || params.get("mobile") === "0")
+    settings.mobileMode = params.get("mobile") === "1";
+  if (params.get("mobileRatio") === "1" || params.get("mobileRatio") === "1.25")
+    settings.mobilePixelRatio = params.get("mobileRatio") === "1" ? 1 : 1.25;
+  if (params.get("markers") === "0" || params.get("markers") === "1")
+    settings.showMarkers = params.get("markers") !== "0";
   const unlit = params.get("noBlockLight");
   if (unlit !== null)
     settings.blockLight = Object.fromEntries(

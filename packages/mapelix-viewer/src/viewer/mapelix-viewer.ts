@@ -30,6 +30,7 @@ import type { SelectionTool } from "../three/selection-box.js";
 import type { AutoPerspective } from "../three/view-projection.js";
 import type { WeatherMode } from "../three/weather-layer.js";
 import { renderProfileSettings, type RenderProfile } from "./render-profile.js";
+import { mobilePixelRatio, type MobilePixelRatio } from "../three/render-quality.js";
 import type {
   BlockLightSettings,
   LeafMode,
@@ -80,6 +81,8 @@ export interface WorldSource {
     | "blockLightColors"
     | "blockLightSmooth"
     | "renderProfile"
+    | "mobileMode"
+    | "mobilePixelRatio"
     | "leaves"
     | "textureBase"
     | "onTextureState"
@@ -88,6 +91,11 @@ export interface WorldSource {
 
 /** What the 3D world shows. Kept while the map is on screen and applied when the world shows. */
 export interface WorldSettings {
+  /** Independent mobile rendering budget (default false). */
+  readonly mobileMode?: boolean;
+  readonly mobilePixelRatio?: MobilePixelRatio;
+  /** Show stored markers in both 2D and 3D (default true). */
+  readonly showMarkers?: boolean;
   /** Optional LOW/HD controls. Individual rendering setters leave this mode. */
   readonly renderProfile?: RenderProfile | undefined;
   /** Show the 3D frame-rate readout in the default controls (default false). */
@@ -123,6 +131,9 @@ export interface WorldSettings {
 }
 
 export const DEFAULT_WORLD_SETTINGS: WorldSettings = {
+  mobileMode: false,
+  mobilePixelRatio: 1.25,
+  showMarkers: true,
   showFps: false,
   blockLight: {},
   blockLightColors: {},
@@ -311,6 +322,7 @@ export class MapelixViewer {
         ? {}
         : renderProfileSettings(options.settings.renderProfile)),
     };
+    mobilePixelRatio(this.settingsNow.mobilePixelRatio ?? 1.25);
     if (getComputedStyle(element).position === "static") element.style.position = "relative";
     this.mapLayer = this.layer();
     this.worldLayer = this.layer();
@@ -355,6 +367,7 @@ export class MapelixViewer {
           return true;
         },
         heightAt: (x, z) => this.worldViewer?.surfaceHeightAt(x, z),
+        heightContext: () => this.info,
         zoomToward: (x, z) => this.zoomToward(x, z),
         isView: (target) =>
           target instanceof Node &&
@@ -363,6 +376,7 @@ export class MapelixViewer {
       options.markerTexts,
     );
     this.markers = this.markerLayer;
+    this.markerLayer.setVisible(this.settingsNow.showMarkers !== false);
     this.lastState = this.mapState();
     // A view that starts zoomed in past the switch scale, or in caves, opens in 3D.
     queueMicrotask(() => {
@@ -554,6 +568,24 @@ export class MapelixViewer {
 
   setShowFps(enabled: boolean): void {
     this.updateSettings({ showFps: enabled });
+  }
+
+  setShowMarkers(enabled: boolean): void {
+    if (typeof enabled !== "boolean") throw new RangeError("Marker visibility must be a boolean");
+    this.updateSettings({ showMarkers: enabled });
+    this.markerLayer.setVisible(enabled);
+  }
+
+  setMobileMode(enabled: boolean): void {
+    if (typeof enabled !== "boolean") throw new RangeError("Mobile mode must be a boolean");
+    this.updateSettings({ mobileMode: enabled });
+    this.worldViewer?.setMobileMode(enabled);
+  }
+
+  setMobilePixelRatio(ratio: MobilePixelRatio): void {
+    mobilePixelRatio(ratio);
+    this.updateSettings({ mobilePixelRatio: ratio });
+    this.worldViewer?.setMobilePixelRatio(ratio);
   }
 
   /** Changes textures, lighting and leaves together in every dimension. */
@@ -1136,6 +1168,8 @@ export class MapelixViewer {
         cameraOverMap(start, Math.max(1, this.element.clientHeight)),
         {
           ...source.options,
+          mobileMode: this.settingsNow.mobileMode ?? false,
+          mobilePixelRatio: this.settingsNow.mobilePixelRatio ?? 1.25,
           projection: this.projectionChoice,
           regionBase: `${source.base}/regions`,
           discoveryBase: `${source.base}/discoveries`,
@@ -1170,6 +1204,8 @@ export class MapelixViewer {
       );
       if (generation !== this.generation) return false;
       world.setPixelsPerBlock(start.pixelsPerBlock);
+      world.setMobilePixelRatio(this.settingsNow.mobilePixelRatio ?? 1.25);
+      world.setMobileMode(this.settingsNow.mobileMode ?? false);
       world.setTimeOfDay(this.settingsNow.hour);
       world.setSelectionTool(this.settingsNow.selectionTool);
       this.info = info;
