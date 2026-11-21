@@ -51,7 +51,7 @@ export function viewerSearch(viewer: MapelixViewer): URLSearchParams {
   if (!settings.clouds) params.set("clouds", "0");
   if (settings.showFps) params.set("fps", "1");
   if (settings.mobileMode) params.set("mobile", "1");
-  if (settings.mobilePixelRatio === 1) params.set("mobileRatio", "1");
+  if (settings.mobilePixelRatio === 1.25) params.set("mobileRatio", "1.25");
   if (settings.showMarkers === false) params.set("markers", "0");
   if (settings.renderProfile !== undefined) params.set("profile", settings.renderProfile);
   else {

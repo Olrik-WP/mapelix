@@ -116,7 +116,7 @@ export type { AutoPerspective, ViewProjection } from "./view-projection";
 export interface WorldViewerOptions {
   /** Opt-in mobile rendering budget, independent of LOW/HD (default false). */
   readonly mobileMode?: boolean;
-  /** Device pixel ratio cap in mobile mode (default 1.25; 1 for comparison). */
+  /** Device pixel ratio cap in mobile mode (default 1; 1.25 for comparison). */
   readonly mobilePixelRatio?: MobilePixelRatio;
   /** Apply LOW or HD together, overriding the individual rendering options. */
   readonly renderProfile?: RenderProfile;
@@ -270,7 +270,7 @@ export class WorldViewer {
   /** A fixed render distance in blocks, or undefined to follow the zoom. */
   private renderDistance: number | undefined;
   private mobileMode = false;
-  private mobileRatio: MobilePixelRatio = 1.25;
+  private mobileRatio: MobilePixelRatio = 1;
   private frames = 0;
   private readonly frameListeners = new Set<() => void>();
   private screenWidth = 1;
@@ -317,7 +317,7 @@ export class WorldViewer {
     if (this.context.mode === "caves") this.caveThickness = this.context.maxY - this.context.minY;
     this.options = options;
     this.mobileMode = options.mobileMode ?? false;
-    this.mobileRatio = mobilePixelRatio(options.mobilePixelRatio ?? 1.25);
+    this.mobileRatio = mobilePixelRatio(options.mobilePixelRatio ?? 1);
     this.blockLight = { ...options.blockLight };
     this.blockLightColors = { ...options.blockLightColors };
     this.blockLightSmooth = { ...options.blockLightSmooth };
@@ -463,7 +463,7 @@ export class WorldViewer {
   ): Promise<WorldViewer> {
     if (options.mobileMode !== undefined && typeof options.mobileMode !== "boolean")
       throw new RangeError("Mobile mode must be a boolean");
-    mobilePixelRatio(options.mobilePixelRatio ?? 1.25);
+    mobilePixelRatio(options.mobilePixelRatio ?? 1);
     if (options.weather !== undefined) weatherMode(options.weather);
     if (options.textures !== undefined && options.textures !== "off" && options.textures !== "on")
       throw new RangeError(`Unknown texture mode ${String(options.textures)}`);

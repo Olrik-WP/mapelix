@@ -93,6 +93,7 @@ export interface WorldSource {
 export interface WorldSettings {
   /** Independent mobile rendering budget (default false). */
   readonly mobileMode?: boolean;
+  /** Device pixel ratio cap in mobile mode (default 1). */
   readonly mobilePixelRatio?: MobilePixelRatio;
   /** Show stored markers in both 2D and 3D (default true). */
   readonly showMarkers?: boolean;
@@ -132,7 +133,7 @@ export interface WorldSettings {
 
 export const DEFAULT_WORLD_SETTINGS: WorldSettings = {
   mobileMode: false,
-  mobilePixelRatio: 1.25,
+  mobilePixelRatio: 1,
   showMarkers: true,
   showFps: false,
   blockLight: {},
@@ -322,7 +323,7 @@ export class MapelixViewer {
         ? {}
         : renderProfileSettings(options.settings.renderProfile)),
     };
-    mobilePixelRatio(this.settingsNow.mobilePixelRatio ?? 1.25);
+    mobilePixelRatio(this.settingsNow.mobilePixelRatio ?? 1);
     if (getComputedStyle(element).position === "static") element.style.position = "relative";
     this.mapLayer = this.layer();
     this.worldLayer = this.layer();
@@ -1169,7 +1170,7 @@ export class MapelixViewer {
         {
           ...source.options,
           mobileMode: this.settingsNow.mobileMode ?? false,
-          mobilePixelRatio: this.settingsNow.mobilePixelRatio ?? 1.25,
+          mobilePixelRatio: this.settingsNow.mobilePixelRatio ?? 1,
           projection: this.projectionChoice,
           regionBase: `${source.base}/regions`,
           discoveryBase: `${source.base}/discoveries`,
@@ -1204,7 +1205,7 @@ export class MapelixViewer {
       );
       if (generation !== this.generation) return false;
       world.setPixelsPerBlock(start.pixelsPerBlock);
-      world.setMobilePixelRatio(this.settingsNow.mobilePixelRatio ?? 1.25);
+      world.setMobilePixelRatio(this.settingsNow.mobilePixelRatio ?? 1);
       world.setMobileMode(this.settingsNow.mobileMode ?? false);
       world.setTimeOfDay(this.settingsNow.hour);
       world.setSelectionTool(this.settingsNow.selectionTool);

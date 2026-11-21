@@ -171,8 +171,10 @@ const response = (await world(request)) ?? (await tiles(request)) ?? notFound();
 ### Optional LOW/HD profiles
 
 Mobile rendering is independent of these profiles. `WorldSettings.mobileMode`
-(default `false`) enables a client-only budget with `mobilePixelRatio: 1.25`
-(default, or `1` for comparison). `MapelixViewer` and `WorldViewer` expose
+(default `false`) enables a client-only budget with `mobilePixelRatio: 1`
+(default; `1.25` remains available through the API or URL for comparison).
+The controls offer a single mobile rendering switch without a resolution selector.
+`MapelixViewer` and `WorldViewer` expose
 `setMobileMode(boolean)` and `setMobilePixelRatio(1 | 1.25)`; `WorldViewerOptions`
 accepts the same fields. Desktop retains its existing 1.75 maximum pixel ratio.
 Mobile rendering caps the automatic view reach at 1024 blocks when the focus
@@ -194,8 +196,10 @@ buffer size, keeping marker projection and pointer rays aligned at every DPR.
 
 URL helpers support `mobile=1`, `mobileRatio=1|1.25`, and `markers=0`.
 The demo initially enables mobile rendering for coarse-pointer devices, with
-stored preferences and explicit URL settings taking precedence. Embedders choose
-when to enable it; the engine does not detect devices automatically.
+stored mobile-mode preferences and explicit URL settings taking precedence. It
+does not restore or persist the old resolution preference, so the default applies
+unless the URL overrides it. Embedders choose when to enable it; the engine does
+not detect devices automatically.
 
 Use `settings: { renderProfile: "low" }` (or `"hd"`) with `MapelixViewer`, then
 `viewer.setRenderProfile("hd")`. `WorldViewer` also accepts `renderProfile` and
