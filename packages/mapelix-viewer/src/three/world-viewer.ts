@@ -61,6 +61,7 @@ import { BlockAtlas } from "./block-atlas";
 import {
   mobilePixelRatio,
   mobileViewDistance,
+  renderDetailScale,
   renderPixelRatio,
   type MobilePixelRatio,
 } from "./render-quality.js";
@@ -669,7 +670,7 @@ export class WorldViewer {
         this.regionsChanged = true;
       },
     });
-    streamer.setDetailScale(this.mobileMode ? Math.max(1, this.renderer.getPixelRatio()) : 1);
+    streamer.setDetailScale(renderDetailScale(this.renderer.getPixelRatio(), this.mobileMode));
     return streamer;
   }
 
@@ -1363,8 +1364,8 @@ export class WorldViewer {
     this.renderer.setSize(width, height, false);
     this.screenWidth = width;
     this.screenHeight = height;
-    // A sharper mobile buffer must not also multiply the amount of terrain geometry.
-    this.streamer.setDetailScale(this.mobileMode ? Math.max(1, this.renderer.getPixelRatio()) : 1);
+    // Mobile terrain uses coarser LODs independently of drawing-buffer resolution.
+    this.streamer.setDetailScale(renderDetailScale(this.renderer.getPixelRatio(), this.mobileMode));
     this.regionsChanged = true;
     this.camera.aspect = width / height;
     this.camera.focusDistance = this.rig.distance;

@@ -5,6 +5,7 @@ import { sceneContext } from "@mapelix/scene-prototype/dimensions";
 import type { SceneMaterials } from "./shaders/materials";
 import { RegionStreamer, type StreamingOptions } from "./region-streamer";
 import { ViewCamera } from "./view-projection";
+import { renderDetailScale } from "./render-quality";
 
 const constructed = vi.hoisted(() => vi.fn());
 vi.mock("./region-mesh", () => ({
@@ -96,7 +97,7 @@ function regionResponse(url: URL): Response {
 }
 
 describe("dimension streaming lifecycle", () => {
-  it("uses the same mobile LODs at ratios 1 and 1.25 without changing cache requests", async () => {
+  it("uses fewer mobile regions at both ratios without changing cache variants", async () => {
     const camera = new ViewCamera(50, 390 / 844, 1, 4000);
     camera.position.set(0, 400, 800);
     camera.lookAt(0, 64, 0);
@@ -106,19 +107,27 @@ describe("dimension streaming lifecycle", () => {
     const requestsAt = async (height: number, scale: number) => {
       const fetcher = vi.fn<typeof fetch>(() => new Promise<Response>(() => {}));
       vi.stubGlobal("fetch", fetcher);
-      const streamer = stream("overworld", { viewDistance: 1400, maxRequests: 128 });
+      const streamer = stream("overworld", { viewDistance: 1400, maxRequests: 4096 });
       streamer.setDetailScale(scale);
       streamer.update(camera, height);
       await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
       const paths = fetcher.mock.calls
-        .map(([input]) => new URL(input instanceof Request ? input.url : input, "http://local").pathname)
+        .map(
+          ([input]) =>
+            new URL(input instanceof Request ? input.url : input, "http://local").pathname,
+        )
         .sort((a, b) => a.localeCompare(b));
       streamer.dispose();
       return paths;
     };
-    const reference = await requestsAt(844, 1);
-    expect(await requestsAt(1055, 1.25)).toEqual(reference);
-    expect(await requestsAt(1055, 1)).not.toEqual(reference);
+    for (const projection of [0, 1]) {
+      camera.projectionBlend = projection;
+      camera.updateProjectionMatrix();
+      const desktop = await requestsAt(844, renderDetailScale(1, false));
+      const mobile = await requestsAt(844, renderDetailScale(1, true));
+      expect(mobile.length).toBeLessThan(desktop.length);
+      expect(await requestsAt(1055, renderDetailScale(1.25, true))).toEqual(mobile);
+    }
   });
 
   it("never uses a cached/drawn coarse height as exact Surface evidence", async () => {
