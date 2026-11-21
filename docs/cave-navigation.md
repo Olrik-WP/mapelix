@@ -22,6 +22,13 @@ keyboard input. Existing WASD/QE/RF controls are preserved. Keys expire after
 600 ms without a keydown/repeat, protecting against a lost keyup. Translation,
 vertical moves included, is capped at 160 blocks/s in Surface and 32 in Caves.
 
+After a Surface ascent or descent, the next gesture can reacquire terrain up to
+the existing orbit limit instead of twice the previous focus distance. This
+returns rotation to the ground when vertical movement left the focus in the air.
+It adds no per-frame raycast and retains the isometric scale. Ordinary gestures
+keep their shorter ray; cave navigation and explicitly pinned discoveries retain
+their focus.
+
 Recover view stops movement, cancels pending automatic metadata, turns off the
 selection tool and restores a distance of 80 and pitch of 60 degrees around the
 current slice midpoint. X/Z, heading, selection and discovery preferences remain.

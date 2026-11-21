@@ -59,6 +59,9 @@ follows the camera's height above the ground, so a pivot on nearby high terrain
 does not slow navigation. These additions preserve source packets and all cache
 identities.
 
+Star-cell hash seeds stay nonnegative before conversion to unsigned integers,
+so the star field covers every sky direction in perspective and isometric views.
+
 The weather tint is an inline TSL helper rather than a nested `Fn`: shared by the
 sky, the water reflection and the haze, a nested `Fn` rendered water opaque.
 
