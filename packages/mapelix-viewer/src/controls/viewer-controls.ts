@@ -704,6 +704,18 @@ export class ViewerControls {
       viewer.setNetherCeiling(Number(ceilingInput.value)),
     );
     ceiling.append(ceilingLabel, ceilingInput);
+    const profileField = make("label", "mx-field", t.renderProfile ?? "Rendering");
+    const profile = make("select");
+    profile.dataset.part = "render-profile";
+    for (const value of ["low", "hd"] as const) {
+      const option = make("option", undefined, value.toUpperCase());
+      option.value = value;
+      profile.append(option);
+    }
+    profile.addEventListener("change", () =>
+      viewer.setRenderProfile(profile.value === "hd" ? "hd" : "low"),
+    );
+    profileField.append(profile);
     // Block textures near the camera, when the server has them.
     const textures = this.check(t.textures, (on) => viewer.setTextures(on ? "on" : "off"));
     textures.dataset.part = "textures";
@@ -724,6 +736,7 @@ export class ViewerControls {
       cavesNote,
       ceiling,
       caves,
+      profileField,
       wrapperOf(textures),
       wrapperOf(blockLight),
       wrapperOf(lightColors),
@@ -1115,6 +1128,17 @@ export class ViewerControls {
     const tool = this.part<HTMLSelectElement>("tool");
     if (tool) tool.value = settings.selectionTool;
 
+    // LOW/HD replaces the individual rendering controls only when opted in.
+    const profile = this.part<HTMLSelectElement>("render-profile");
+    if (profile) {
+      show(profile.parentElement ?? undefined, settings.renderProfile !== undefined);
+      if (settings.renderProfile !== undefined) profile.value = settings.renderProfile;
+      profile.disabled = !status.available || status.changing;
+    }
+    for (const name of ["textures", "block-light", "block-light-colors", "block-light-smooth"]) {
+      const input = this.part<HTMLInputElement>(name);
+      if (input) show(wrapperOf(input), settings.renderProfile === undefined);
+    }
     // Block textures.
     const blockLight = this.part<HTMLInputElement>("block-light");
     if (blockLight) {
@@ -1144,7 +1168,7 @@ export class ViewerControls {
     if (leaves) {
       leaves.checked = settings.leaves === "detailed";
       // Only textured leaves have a detailed look.
-      show(wrapperOf(leaves), settings.textures === "on");
+      show(wrapperOf(leaves), settings.renderProfile === undefined && settings.textures === "on");
     }
     const texturesNote = this.part("textures-note");
     if (texturesNote) {

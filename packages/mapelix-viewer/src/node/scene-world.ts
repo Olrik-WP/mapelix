@@ -27,7 +27,13 @@ import {
 } from "./discovery-service.js";
 import { parseExtent, scanWorldExtent, type WorldExtent } from "./extent.js";
 import { DimensionPools } from "./pools.js";
-import { Prewarmer, prewarmPlan, type PrewarmJob, type PrewarmProgress } from "./prewarm.js";
+import {
+  Prewarmer,
+  prewarmPlan,
+  profilePrewarmPlan,
+  type PrewarmJob,
+  type PrewarmProgress,
+} from "./prewarm.js";
 import {
   InvalidRegionError,
   RegionService,
@@ -153,9 +159,11 @@ export type TextureStats =
   | { readonly error: string };
 
 export interface PrewarmOptions {
+  /** Prepare only LOW/HD Surface variants; cannot be combined with blockLightModes. */
+  readonly renderProfiles?: boolean;
   /** Near variants to prepare (default [true]); false adds unlit, "colored" adds source colors. */
   readonly blockLightModes?: readonly (boolean | "colored" | "smooth" | "colored-smooth")[];
-  /** At most this many Surface regions, coarse levels and the middle of the world first. */
+  /** At most this many Surface regions (all variants combined with renderProfiles). */
   readonly maxRegions?: number;
   /** Then every discovery index of the stored area (default true). */
   readonly discoveries?: boolean;
@@ -290,12 +298,11 @@ export function createSceneServer(options: SceneServerOptions) {
   let texturePrewarm: Prewarmer | undefined;
   let stopTexturePrewarm: AbortController | undefined;
   let prewarming: Promise<PrewarmResult> | undefined;
-  /** The running prewarm's size and signal, once it reaches the textured regions. */
+  /** The shared campaign's texture jobs and signal, retained for later stack changes. */
   let texturePrewarmRun:
     | {
-        readonly maxRegions: number;
         readonly signal: AbortSignal;
-        readonly blockLightModes: readonly (boolean | "colored" | "smooth" | "colored-smooth")[];
+        readonly jobs: readonly PrewarmJob[];
       }
     | undefined;
   const stopPrewarm = new AbortController();
@@ -534,32 +541,21 @@ export function createSceneServer(options: SceneServerOptions) {
     });
     // A prewarm that already reached the textured regions starts them again for the new stack.
     if (texturePrewarmRun !== undefined && !texturePrewarmRun.signal.aborted) {
-      void prewarmTextures(
-        world,
-        set,
-        texturePrewarmRun.maxRegions,
-        texturePrewarmRun.signal,
-        texturePrewarmRun.blockLightModes,
-      );
+      void prewarmTextures(set, texturePrewarmRun.jobs, texturePrewarmRun.signal);
     }
     return report;
   }
 
   /** Builds the textured level 0 Surface regions of a stack, behind every visitor. */
   async function prewarmTextures(
-    world: Opened,
     set: TextureSet,
-    maxRegions: number,
+    jobs: readonly PrewarmJob[],
     signal: AbortSignal,
-    blockLightModes: readonly (boolean | "colored" | "smooth" | "colored-smooth")[],
   ): Promise<PrewarmProgress> {
     stopTexturePrewarm?.abort();
     const stop = new AbortController();
     stopTexturePrewarm = stop;
-    texturePrewarmRun = { maxRegions, signal, blockLightModes };
-    const jobs = prewarmPlan(world.bounds, maxRegions, blockLightModes).filter(
-      (job) => job.level === 0,
-    );
+    texturePrewarmRun = { jobs, signal };
     const prewarmer = new Prewarmer(
       {
         load: async (dimension, request, jobSignal, load) => {
@@ -775,6 +771,8 @@ export function createSceneServer(options: SceneServerOptions) {
    */
   function prewarm(prewarmOptions: PrewarmOptions = {}): Promise<PrewarmResult> {
     prewarming ??= (async () => {
+      if (prewarmOptions.renderProfiles === true && prewarmOptions.blockLightModes !== undefined)
+        throw new RangeError("renderProfiles cannot be combined with blockLightModes");
       const world = await ready();
       const signal =
         prewarmOptions.signal === undefined
@@ -782,12 +780,13 @@ export function createSceneServer(options: SceneServerOptions) {
           : AbortSignal.any([stopPrewarm.signal, prewarmOptions.signal]);
       const maxRegions = positiveInteger(prewarmOptions.maxRegions ?? 100_000, "maxRegions");
       const blockLightModes = [...(prewarmOptions.blockLightModes ?? [true])];
-      regionPrewarm = new Prewarmer(
-        world.surface,
-        prewarmPlan(world.bounds, maxRegions, blockLightModes),
-        nearlyFull(world.disks.surface),
-        event,
-      );
+      const profiles =
+        prewarmOptions.renderProfiles === true
+          ? profilePrewarmPlan(world.bounds, maxRegions)
+          : undefined;
+      const jobs = profiles?.regions ?? prewarmPlan(world.bounds, maxRegions, blockLightModes);
+      const texturedJobs = profiles?.textures ?? jobs.filter((job) => job.level === 0);
+      regionPrewarm = new Prewarmer(world.surface, jobs, nearlyFull(world.disks.surface), event);
       const discoveryJobs: PrewarmJob[] =
         prewarmOptions.discoveries === false
           ? []
@@ -812,9 +811,9 @@ export function createSceneServer(options: SceneServerOptions) {
       let textures = IDLE;
       if (!signal.aborted) {
         // Later stacks set with `setTextures` are prewarmed in turn.
-        texturePrewarmRun = { maxRegions, signal, blockLightModes };
+        texturePrewarmRun = { jobs: texturedJobs, signal };
         if (textureSet !== undefined) {
-          textures = await prewarmTextures(world, textureSet, maxRegions, signal, blockLightModes);
+          textures = await prewarmTextures(textureSet, texturedJobs, signal);
         }
       }
       return { regions, discoveries, textures };

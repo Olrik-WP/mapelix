@@ -168,6 +168,39 @@ const response = (await world(request)) ?? (await tiles(request)) ?? notFound();
 - **Stats.** `stats()` gives the revision, open dimensions, builds, caches and prewarm progress;
   the host chooses whether and where to show them.
 
+### Optional LOW/HD profiles
+
+Use `settings: { renderProfile: "low" }` (or `"hd"`) with `MapelixViewer`, then
+`viewer.setRenderProfile("hd")`. `WorldViewer` also accepts `renderProfile` and
+`setRenderProfile()`. The default controls show only a LOW/HD selector for rendering
+when this option is present. LOW disables textures and block lighting and uses fast
+leaves. HD enables textures, colored smooth block lighting and detailed leaves.
+Each switch applies these settings together, in every dimension. FPS, time and weather
+remain independent. Existing individual setters still work and leave profile mode.
+The URL helpers accept and write `profile=low|hd`.
+
+Call `scene.prewarm({ renderProfiles: true })` once on the existing shared `SceneServer`;
+do not combine this with `blockLightModes` or create a campaign per viewer. It prepares:
+
+| LOD | Variants                                                                           |
+| --- | ---------------------------------------------------------------------------------- |
+| 0   | LOW plain; HD plain for transitions; HD textured with detailed leaves (`cutout=1`) |
+| 1   | LOW plain; HD plain                                                                |
+| 2–5 | One common plain variant                                                           |
+
+No other rendering combinations are prepared. Existing build, memory and disk quotas
+stay unchanged. `maxRegions` caps all these variants together; a coordinate is included
+only when all its variants fit. Coarse regions and central coordinates come first.
+Discovery prewarming remains controlled by `discoveries`.
+
+Both host routes should keep sharing that server and its cache. With
+`createSceneHandler(scene, base, { cacheOnly: true })`, profile switches read prepared
+Surface variants and never trigger a build. A cache miss stays a 404 `not-cached`.
+The campaign covers the stored Surface area at default ceilings; cave slices, custom
+ceilings and coordinates omitted by quotas need separate preparation. HD textures
+require an available texture stack; without one, HD keeps its plain transition view.
+Region format 6 and embed API 5 are unchanged.
+
 ### Handlers
 
 `createSceneHandler(server, base, options)` serves `world.json`, `regions/<level>/<x>/<z>` and

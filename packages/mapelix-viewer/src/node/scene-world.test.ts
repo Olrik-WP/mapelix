@@ -19,6 +19,7 @@ import {
 import { NotCachedError, InvalidRegionError } from "./region-service";
 import { MissingWorldError, createSceneServer, type SceneServerOptions } from "./scene-world";
 import { writeFixtureManifest } from "../../../mapelix-prototype/test/leveldb-fixture.js";
+import { createSceneHandler } from "./http.js";
 
 const mocks = vi.hoisted(() => ({ opened: vi.fn(), built: vi.fn(), discovered: vi.fn() }));
 
@@ -227,6 +228,83 @@ describe("scene server", () => {
     expect(stats.surface.cache.entries).toBe(result.regions.built);
     expect(stats.openDimensions).toEqual(["overworld"]);
     await server.close();
+  });
+
+  it("shares one LOW/HD campaign across handlers, including detailed leaves in cache-only", async () => {
+    const pack = join(root, "pack.zip");
+    await writeFile(
+      pack,
+      makeZip(
+        packFiles({
+          terrain: { leaves: { textures: "textures/blocks/leaves_oak" } },
+          blocks: { leaves: { textures: "leaves" } },
+          images: { "textures/blocks/leaves_oak.png": makePng(16, [80, 140, 50, 128]) },
+        }),
+      ),
+    );
+    const serverOptions = {
+      ...options,
+      bounds: { minX: 0, minZ: 0, maxX: 15, maxZ: 15 },
+      textures: { packs: [pack] },
+    };
+    const server = createSceneServer(serverOptions);
+    const campaign = server.prewarm({ renderProfiles: true, maxRegions: 1000, discoveries: false });
+    expect(server.prewarm({ renderProfiles: true })).toBe(campaign);
+    const result = await campaign;
+    expect(result.regions).toMatchObject({ state: "done", total: 24, built: 24, failed: 0 });
+    expect(result.textures).toMatchObject({ state: "done", total: 3, built: 3, failed: 0 });
+    const textured = mocks.built.mock.calls.filter(([, request]) => request.textures !== undefined);
+    expect(textured).toHaveLength(3);
+    for (const [, request] of textured)
+      expect(request).toMatchObject({
+        level: 0,
+        cutout: true,
+        blockLightColors: true,
+        blockLightSmooth: true,
+      });
+    const revision = (await server.getWorldMetadata()).textures!.revision;
+    await server.close();
+
+    // Restarting proves the prepared variants are on disk, shared by both consumers.
+    const cached = createSceneServer(serverOptions);
+    const handlers = [
+      createSceneHandler(cached, "/world", { cacheOnly: true }),
+      createSceneHandler(cached, "/world", { cacheOnly: true }),
+    ];
+    for (const dimension of ["overworld", "nether", "the-end"]) {
+      for (const profile of ["hd", "low", "hd"]) {
+        const light = profile === "low" ? "blockLight=0" : "blockLightColors=1&blockLightSmooth=1";
+        const paths = [
+          `0/0/0?dimension=${dimension}&${light}`,
+          `1/0/0?dimension=${dimension}&${light}`,
+          `5/0/0?dimension=${dimension}`,
+          ...(profile === "hd"
+            ? [`0/0/0?dimension=${dimension}&${light}&textures=${revision}&cutout=1`]
+            : []),
+        ];
+        for (const handle of handlers)
+          for (const path of paths) {
+            const response = await handle(new Request(`http://local/world/regions/${path}`));
+            expect(response?.status).toBe(200);
+            expect(["disk", "memory"]).toContain(response?.headers.get("x-mapelix-cache"));
+          }
+      }
+    }
+    // Fast textured leaves are deliberately absent, and a visitor cannot build them.
+    const missing = await handlers[1]!(
+      new Request(
+        `http://local/world/regions/0/0/0?blockLightColors=1&blockLightSmooth=1&textures=${revision}`,
+      ),
+    );
+    expect(missing?.status).toBe(404);
+    expect(await missing?.json()).toMatchObject({ error: "not-cached" });
+    expect(mocks.built).toHaveBeenCalledTimes(27);
+    const stats = await cached.stats();
+    expect(stats.surface.builds.built).toBe(0);
+    expect(stats.textured?.builds.built).toBe(0);
+    expect(stats.surface.cache.entries).toBe(24);
+    expect(stats.textured?.cache.entries).toBe(3);
+    await cached.close();
   });
 
   it("removes older revisions from the cache when it opens", async () => {

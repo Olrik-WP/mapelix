@@ -58,6 +58,7 @@ import {
 } from "./shaders/materials";
 import { DEFAULT_TEXTURE_FADE, TextureLook, type TextureFade } from "./shaders/textured";
 import { BlockAtlas } from "./block-atlas";
+import { renderProfileSettings, type RenderProfile } from "../viewer/render-profile.js";
 import {
   CAVE_LIMITS,
   DIMENSIONS,
@@ -97,6 +98,7 @@ export type LeafMode = "fast" | "detailed";
 export type TextureState = "off" | "unavailable" | "loading" | "on" | "failed";
 
 export type { TextureFade } from "./shaders/textured";
+export type { RenderProfile } from "../viewer/render-profile.js";
 
 export type { CameraView, VerticalMovement } from "./camera-rig";
 export type { DiscoveryDetailText } from "./discovery-focus";
@@ -105,6 +107,8 @@ export type { AutoPerspective, ViewProjection } from "./view-projection";
 
 /** Kept across view switches so embedding does not fall back to a different server. */
 export interface WorldViewerOptions {
+  /** Apply LOW or HD together, overriding the individual rendering options. */
+  readonly renderProfile?: RenderProfile;
   /** Baked block illumination per dimension (default enabled everywhere). */
   readonly blockLight?: BlockLightSettings;
   /** Dominant-source light colors per dimension (default disabled). */
@@ -293,6 +297,8 @@ export class WorldViewer {
     start: Partial<CameraView>,
     options: WorldViewerOptions,
   ) {
+    if (options.renderProfile !== undefined)
+      options = { ...options, ...renderProfileSettings(options.renderProfile) };
     this.container = container;
     this.world = world;
     this.context = sceneContext(world.dimension, world);
@@ -644,6 +650,26 @@ export class WorldViewer {
         this.regionsChanged = true;
       },
     });
+  }
+
+  /** Applies all rendering settings before changing the streamer, without intermediate variants. */
+  setRenderProfile(profile: RenderProfile): void {
+    const settings = renderProfileSettings(profile);
+    const dimension = this.context.dimension;
+    const lightingChanged =
+      (this.blockLight[dimension] !== false) !== (settings.blockLight[dimension] !== false) ||
+      (this.blockLightColors[dimension] === true) !==
+        (settings.blockLightColors[dimension] === true) ||
+      (this.blockLightSmooth[dimension] === true) !==
+        (settings.blockLightSmooth[dimension] === true);
+    this.blockLight = settings.blockLight;
+    this.blockLightColors = settings.blockLightColors;
+    this.blockLightSmooth = settings.blockLightSmooth;
+    this.textureMode = settings.textures;
+    this.leafMode = settings.leaves;
+    this.failedTextureRevision = undefined;
+    if (lightingChanged) this.reloadLighting();
+    else this.applyTextures();
   }
 
   /** Loads near-region geometry with or without baked light, retaining the camera and atlas. */
