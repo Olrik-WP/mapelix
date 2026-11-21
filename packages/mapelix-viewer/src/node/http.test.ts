@@ -44,6 +44,13 @@ function fakeServer() {
 const get = (path: string, init?: RequestInit) => new Request(`http://local${path}`, init);
 
 describe("scene handler", () => {
+  it("forwards optional smoothing and refuses invalid flags", async () => {
+    const server = fakeServer(),
+      handle = createSceneHandler(server as unknown as SceneServer, "/world");
+    expect((await handle(get("/world/regions/0/0/0?blockLightSmooth=1")))?.status).toBe(200);
+    expect(server.loadRegion.mock.calls[0]![0]).toMatchObject({ blockLightSmooth: true });
+    expect((await handle(get("/world/regions/0/0/0?blockLightSmooth=2")))?.status).toBe(400);
+  });
   it("forwards colored-light requests and rejects malformed modes", async () => {
     const server = fakeServer(),
       handle = createSceneHandler(server as unknown as SceneServer, "/world");

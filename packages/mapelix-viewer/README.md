@@ -83,13 +83,16 @@ working unchanged, with textures off, and with a server that has no texture stac
   reports list it in `skipped`. `createViewerControls` takes `texturesLink` (`{ href, label }`),
   a link under the textures switch for a host that lets people choose the pack.
 - Block light works in plain and textured views at LOD 0/1 without a new host option.
-  Its binary region format is version 5: upgrade the server and browser bundle together.
+  Its binary region format is version 6: upgrade the server and browser bundle together.
   Embed API version 5 and request URLs remain unchanged; direct binary readers must support
   the optional light plane. See [block light](../../docs/block-lighting.md).
 - Optional per-dimension source colors: `WorldSettings.blockLightColors`,
   `MapelixViewer.setBlockLightColors()` and the matching `WorldViewer` option/method.
   Defaults retain warm light. See [source light colors](../../docs/colored-block-lighting.md)
   for region requests, cache variants and prewarming.
+- Optional per-dimension corner smoothing: `blockLightSmooth` and
+  `setBlockLightSmooth()` on both viewers. Disabled by default; see
+  [smooth block lighting](../../docs/smooth-block-lighting.md).
 
 ### API version 4 (changes from 3)
 

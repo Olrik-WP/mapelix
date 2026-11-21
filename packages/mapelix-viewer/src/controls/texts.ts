@@ -53,6 +53,7 @@ export interface ControlTexts {
   readonly textures: string;
   readonly blockLight: string;
   readonly blockLightColors: string;
+  readonly blockLightSmooth: string;
   readonly showFps: string;
   readonly frameRate: (fps: number | undefined) => string;
   readonly texturesUnavailable: string;
@@ -143,6 +144,7 @@ export const DEFAULT_CONTROL_TEXTS: ControlTexts = {
   textures: "Block textures",
   blockLight: "Block lighting",
   blockLightColors: "Source light colors",
+  blockLightSmooth: "Smooth block lighting",
   showFps: "Show FPS",
   frameRate: (fps) => `${fps && Number.isFinite(fps) ? Math.round(fps) : "—"} FPS`,
   texturesUnavailable: "This world has no block textures.",

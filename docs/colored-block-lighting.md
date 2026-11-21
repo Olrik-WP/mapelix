@@ -2,7 +2,8 @@
 
 Block light can keep its original warm appearance or use the dominant source's
 color. Both modes work with and without textures, on Surface and in Caves, at
-LOD 0 and 1. LOD 2–5 retain their previous geometry. Corner smoothing is not enabled.
+LOD 0 and 1. LOD 2–5 retain their previous geometry. Optional
+[corner smoothing](smooth-block-lighting.md) is disabled by default.
 
 ## Bounded computation
 
@@ -20,7 +21,10 @@ Nether portals use violet, lava uses orange and redstone uses red. Sea lanterns,
 froglights and other known sources have their own families. The table is shared
 by the serializer and viewer through the browser-safe format entry.
 
-## Region format 5
+## Color layout, introduced in region format 5
+
+The current format is **6**; flat color planes retain the layout below. Smooth
+planes use four bytes per quad as described in the smoothing contract.
 
 Header, geometry, texture words, alignment and the optional byte plane keep
 their sizes. Header byte 7 bit 2 (`REGION_FLAG_BLOCK_LIGHT_COLORS = 4`) means
@@ -33,7 +37,7 @@ Both light modes cost one byte per quad when the plane is present. Different
 families can split merged faces; actual region size must therefore be measured.
 Emissive faces, including lava, still store zero unused local fill.
 
-Version-4 readers reject version 5, and this reader rejects earlier versions.
+Earlier readers reject version 6, and this reader rejects earlier versions.
 Upgrade server and browser bundle together. Engine fingerprints and world
 revisions invalidate prior derived regions automatically. Atlas format 2,
 texture pipeline 10 and embed API version 5 are unchanged.

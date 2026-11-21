@@ -73,6 +73,28 @@ const signal = (): AbortSignal => new AbortController().signal;
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("RegionService", () => {
+  it("isolates smooth cache variants and lets disabled light override smoothing", async () => {
+    const builder = controlledBuilder(),
+      store = memoryStore(),
+      regions = service(builder.build, store);
+    const requests = [
+      { level: 0, x: 0, z: 0 },
+      { level: 0, x: 0, z: 0, blockLightSmooth: true },
+      { level: 0, x: 0, z: 0, blockLightSmooth: true, blockLightColors: true },
+      { level: 0, x: 0, z: 0, blockLightSmooth: true, blockLight: false },
+    ];
+    for (const request of requests) {
+      const result = regions.load("overworld", request, signal());
+      await tick();
+      builder.pending.at(-1)!.resolve();
+      await result;
+    }
+    expect(new Set(store.files.keys()).size).toBe(4);
+    expect([...store.files.keys()].some((key) => key.startsWith("smooth/"))).toBe(true);
+    expect([...store.files.keys()].some((key) => key.startsWith("colored/smooth/"))).toBe(true);
+    expect(builder.pending.at(-1)!.request.blockLightSmooth).toBeUndefined();
+    expect((await regions.load("overworld", requests[1]!, signal())).cacheStatus).toBe("memory");
+  });
   it("isolates warm, colored and unlit caches while sharing distant geometry", async () => {
     const builder = controlledBuilder(),
       store = memoryStore(),

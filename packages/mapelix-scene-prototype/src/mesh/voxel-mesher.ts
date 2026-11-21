@@ -21,6 +21,7 @@ import {
 import { blockModelParts, type ModelBounds } from "../blocks/block-models.js";
 import { lavaFlowDirection } from "./lava-flow.js";
 import { buildBlockLight } from "./block-light.js";
+import { cornerLight, repeatLight } from "./smooth-light.js";
 import { blendColumnTints } from "./biome-tints.js";
 import type { GeometryMode } from "../dimensions.js";
 import { BlockPalette, PALETTE_ID_MASK, Shape, TintCode, WATERLOGGED } from "./block-palette.js";
@@ -77,11 +78,17 @@ export function meshRegionVolume(
   cutout = false,
   blockLight = true,
   blockLightColors = false,
+  blockLightSmooth = false,
 ): SceneRegion {
-  return new VoxelMesher(volume, palette, geometry, cutout, blockLight, blockLightColors).mesh(
-    regionX,
-    regionZ,
-  );
+  return new VoxelMesher(
+    volume,
+    palette,
+    geometry,
+    cutout,
+    blockLight,
+    blockLightColors,
+    blockLightSmooth,
+  ).mesh(regionX, regionZ);
 }
 
 class VoxelMesher {
@@ -119,6 +126,13 @@ class VoxelMesher {
   /** Whether faces take the light of the blocks around them; off builds lighter regions. */
   private readonly blockLight: boolean;
   private readonly blockLightColors: boolean;
+  private readonly blockLightSmooth: boolean;
+  private maskLight: Uint32Array | undefined;
+  private readonly readLight = (index: number, y: number) => this.lightAt(index, y);
+  private readonly lightOpaque = (index: number, y: number) =>
+    y >= this.baseY &&
+    y < this.limitY &&
+    this.palette.isOpaque(this.cells[index]! & PALETTE_ID_MASK);
 
   constructor(
     volume: RegionVolume,
@@ -127,9 +141,11 @@ class VoxelMesher {
     cutout: boolean,
     blockLight: boolean,
     blockLightColors: boolean,
+    blockLightSmooth: boolean,
   ) {
     this.blockLight = blockLight;
     this.blockLightColors = blockLightColors;
+    this.blockLightSmooth = blockLightSmooth;
     this.geometry = geometry;
     this.cutout = palette.textures !== undefined ? palette.cutout : undefined;
     this.cutoutCubes = cutout;
@@ -140,9 +156,9 @@ class VoxelMesher {
     this.cells = volume.cells;
     this.baseY = volume.baseY ?? WORLD_MIN_Y;
     this.limitY = volume.limitY ?? WORLD_MAX_Y;
-    this.opaque = new QuadList(textured);
-    this.plants = new QuadList(textured);
-    this.translucent = new QuadList(textured);
+    this.opaque = new QuadList(textured, blockLightSmooth);
+    this.plants = new QuadList(textured, blockLightSmooth);
+    this.translucent = new QuadList(textured, blockLightSmooth);
     this.low = this.minY = this.limitY;
     this.maxY = this.baseY;
     this.tints = blendColumnTints(
@@ -188,6 +204,7 @@ class VoxelMesher {
       translucent: this.translucent.finish(),
       ...(blockLight === undefined ? {} : { blockLight }),
       ...(blockLight !== undefined && this.blockLightColors ? { blockLightColors: true } : {}),
+      ...(blockLight !== undefined && this.blockLightSmooth ? { blockLightSmooth: true } : {}),
     };
     if (opaqueTextures === undefined) return region;
     return {
@@ -252,6 +269,8 @@ class VoxelMesher {
     const textures =
       this.textureWords === undefined ? undefined : new Uint32Array(layout.slices * layout.area);
     this.maskTextures = textures;
+    this.maskLight =
+      this.blockLightSmooth && this.light !== undefined ? new Uint32Array(keys.length) : undefined;
     const used = new Uint8Array(layout.slices);
 
     for (let z = 0; z < SPAN; z += 1) {
@@ -275,10 +294,11 @@ class VoxelMesher {
         keys.subarray(start, start + layout.area),
         colors.subarray(start, start + layout.area),
         layout,
-        (key, color, u, v, width, height, texture) => {
-          this.emit(key, color, face, slice, u, v, width, height, texture);
+        (key, color, u, v, width, height, texture, light) => {
+          this.emit(key, color, face, slice, u, v, width, height, texture, light);
         },
         textures?.subarray(start, start + layout.area),
+        this.maskLight?.subarray(start, start + layout.area),
       );
     }
   }
@@ -345,7 +365,22 @@ class VoxelMesher {
       material === QuadMaterial.Emissive
         ? 0
         : this.lightAt(boundary ? neighbor : index, boundary ? neighborY : y);
-    keys[mask] = ((covered ? key | KEY_COVERED : key) | (light << KEY_BLOCK_LIGHT_SHIFT)) >>> 0;
+    if (this.maskLight !== undefined)
+      this.maskLight[mask] =
+        material === QuadMaterial.Emissive
+          ? 0
+          : cornerLight(
+              STEPS,
+              face,
+              boundary ? neighbor : index,
+              boundary ? neighborY : y,
+              this.readLight,
+              this.lightOpaque,
+            );
+    keys[mask] =
+      ((covered ? key | KEY_COVERED : key) |
+        ((this.maskLight === undefined ? light : 0) << KEY_BLOCK_LIGHT_SHIFT)) >>>
+      0;
     colors[mask] = packQuadWord2(color, occlusion);
     if (this.maskTextures !== undefined) {
       const word = this.textureWords![id * 6 + face]!;
@@ -389,12 +424,23 @@ class VoxelMesher {
       }
     }
     const inner = face === Face.PositiveY && surface;
+    if (this.maskLight !== undefined)
+      this.maskLight[mask] = cornerLight(
+        STEPS,
+        face,
+        inner ? index : index + STEPS.normal[face]!,
+        inner ? y : y + NORMAL_LAYER[face]!,
+        this.readLight,
+        this.lightOpaque,
+      );
     keys[mask] =
       (mergeKey(QuadMaterial.Water, size, 0, false, face) |
-        (this.lightAt(
-          inner ? index : index + STEPS.normal[face]!,
-          inner ? y : y + NORMAL_LAYER[face]!,
-        ) <<
+        ((this.maskLight === undefined
+          ? this.lightAt(
+              inner ? index : index + STEPS.normal[face]!,
+              inner ? y : y + NORMAL_LAYER[face]!,
+            )
+          : 0) <<
           KEY_BLOCK_LIGHT_SHIFT)) >>>
       0;
     colors[mask] = packQuadWord2(this.tintOf(TintCode.Water, column, y), FULLY_LIT);
@@ -466,6 +512,7 @@ class VoxelMesher {
     width: number,
     height: number,
     texture: number,
+    light?: number,
   ): void {
     const [x, y, z] = slicePosition(face, slice, u, v, this.low);
     const material = keyMaterial(key);
@@ -477,7 +524,7 @@ class VoxelMesher {
         ((key & KEY_LAVA) !== 0 ? QUAD_LAVA_FLAG | (((key >>> 12) & 15) << 28) : 0),
       color,
       texture,
-      (key >>> KEY_BLOCK_LIGHT_SHIFT) & 255,
+      light ?? (key >>> KEY_BLOCK_LIGHT_SHIFT) & 255,
     );
     this.minY = Math.min(this.minY, y);
     this.maxY = Math.max(this.maxY, y + (isFlatFace(face) ? 1 : height));
@@ -507,14 +554,14 @@ class VoxelMesher {
             word1,
             word2,
             texture,
-            this.lightAt(index, y),
+            this.storedLightAt(index, y),
           );
           this.plants.push(
             packQuadWord0(x, y, z, Face.CrossB, QuadMaterial.Plant),
             word1,
             word2,
             texture,
-            this.lightAt(index, y),
+            this.storedLightAt(index, y),
           );
           if (this.geometry !== "surface") {
             this.minY = Math.min(this.minY, y);
@@ -598,7 +645,7 @@ class VoxelMesher {
                       ),
                 material === QuadMaterial.Emissive
                   ? 0
-                  : this.lightAt(
+                  : this.storedLightAt(
                       boundary ? index + STEPS.normal[face]! : index,
                       boundary ? neighborY : y,
                     ),
@@ -624,6 +671,11 @@ class VoxelMesher {
 
   private lightAt(index: number, y: number): number {
     return y < this.baseY || y >= this.limitY ? 0 : (this.light?.[index] ?? 0);
+  }
+
+  private storedLightAt(index: number, y: number): number {
+    const light = this.lightAt(index, y);
+    return this.blockLightSmooth ? repeatLight(light) : light;
   }
 
   /** Four corner occlusion levels from the opaque cubes around the cell in front of a face. */

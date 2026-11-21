@@ -145,6 +145,30 @@ it("builds lighter near regions without block light when asked", () => {
   }
 });
 
+it.each([0, 1])("keeps smoothing optional and emits valid corner words at LOD %i", (level) => {
+  const request = { level, x: 0, z: 0, blockLightColors: true };
+  const flat = decodeSceneRegion(builders[0]!.build(request));
+  const smooth = decodeSceneRegion(builders[0]!.build({ ...request, blockLightSmooth: true }));
+  expect(flat.blockLightSmooth).toBeUndefined();
+  expect(flat.blockLight!.opaque).toBeInstanceOf(Uint8Array);
+  expect(smooth.blockLightSmooth).toBe(true);
+  expect(smooth.blockLight!.opaque).toBeInstanceOf(Uint32Array);
+  const word = topLight(smooth, 39, 63, 8);
+  expect(
+    Array.from({ length: 4 }, (_, i) => (word >>> (8 * i)) & 255).every((code) => code >>> 4 === 2),
+  ).toBe(true);
+  const off = decodeSceneRegion(
+    builders[0]!.build({ ...request, blockLightSmooth: true, blockLight: false }),
+  );
+  expect(off.blockLight).toBeUndefined();
+  expect(off.blockLightSmooth).toBeUndefined();
+  const far = decodeSceneRegion(
+    builders[0]!.build({ ...request, level: 2, blockLightSmooth: true }),
+  );
+  expect(far.blockLightSmooth).toBeUndefined();
+  expect(far.blockLight).toBeUndefined();
+});
+
 it.each([0, 1, 2])(
   "preserves colored portal and soul light in dimension %i at both near levels",
   (dimension) => {

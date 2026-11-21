@@ -711,6 +711,8 @@ export class ViewerControls {
     blockLight.dataset.part = "block-light";
     const lightColors = this.check(t.blockLightColors, (on) => viewer.setBlockLightColors(on));
     lightColors.dataset.part = "block-light-colors";
+    const lightSmooth = this.check(t.blockLightSmooth, (on) => viewer.setBlockLightSmooth(on));
+    lightSmooth.dataset.part = "block-light-smooth";
     const fps = this.check(t.showFps, (on) => viewer.setShowFps(on));
     fps.dataset.part = "show-fps";
     const leaves = this.check(t.detailedLeaves, (on) => viewer.setLeaves(on ? "detailed" : "fast"));
@@ -725,6 +727,7 @@ export class ViewerControls {
       wrapperOf(textures),
       wrapperOf(blockLight),
       wrapperOf(lightColors),
+      wrapperOf(lightSmooth),
       wrapperOf(fps),
       wrapperOf(leaves),
       texturesNote,
@@ -1120,6 +1123,12 @@ export class ViewerControls {
     }
     const fps = this.part<HTMLInputElement>("show-fps");
     const lightColors = this.part<HTMLInputElement>("block-light-colors");
+    const lightSmooth = this.part<HTMLInputElement>("block-light-smooth");
+    if (lightSmooth) {
+      lightSmooth.checked =
+        dimension !== undefined && settings.blockLightSmooth?.[dimension] === true;
+      lightSmooth.disabled = blockLight?.disabled === true || blockLight?.checked !== true;
+    }
     if (lightColors) {
       lightColors.checked =
         dimension !== undefined && settings.blockLightColors?.[dimension] === true;

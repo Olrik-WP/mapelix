@@ -17,6 +17,7 @@ export interface RegionRequest extends SceneContextOptions {
   readonly blockLight?: boolean;
   /** Optional dominant-source color families in the existing light byte. */
   readonly blockLightColors?: boolean;
+  readonly blockLightSmooth?: boolean;
   /** Exclusive upper mesh bound, in multiples of 16. Defaults to the dimension profile. */
   readonly ceilingY?: number;
   readonly level: number;
@@ -145,6 +146,7 @@ export class RegionBuilder {
             request.cutout === true,
             request.blockLight !== false,
             request.blockLightColors === true,
+            request.blockLightSmooth === true && request.blockLight !== false,
           );
     }
     const voxels = buildVoxelRegion(
@@ -156,6 +158,7 @@ export class RegionBuilder {
       window,
       request.blockLight !== false,
       request.blockLightColors === true,
+      request.blockLightSmooth === true && request.blockLight !== false,
     );
     return voxels === undefined ? emptyRegion(level, x, z) : meshVoxelRegion(voxels, geometry);
   }

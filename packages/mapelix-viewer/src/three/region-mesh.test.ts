@@ -41,6 +41,52 @@ const quad = (kind: QuadMaterial) =>
     packQuadWord2(0x808080, 255),
   );
 
+it("uploads smooth corner words directly, counts them, and keeps them paired with translucent quads", () => {
+  const empty = new Uint32Array(0),
+    a = 0x22232425,
+    b = 0x12131415;
+  const region = decodeSceneRegion(
+    encodeSceneRegion({
+      level: 0,
+      x: 0,
+      z: 0,
+      minY: 0,
+      maxY: 1,
+      heights: new Int16Array(4096),
+      opaque: quad(QuadMaterial.Solid),
+      plants: empty,
+      translucent: Uint32Array.from([...quad(QuadMaterial.Glass), ...quad(QuadMaterial.Water)]),
+      blockLightColors: true,
+      blockLightSmooth: true,
+      blockLight: { opaque: Uint32Array.of(a), plants: empty, translucent: Uint32Array.of(a, b) },
+    }),
+  );
+  const mesh = new RegionMesh(region, materials),
+    attrs = mesh.group.children.map((c) => (c as Mesh).geometry.getAttribute("smoothLight"));
+  expect(attrs.map((a) => a.array[0])).toEqual([a, b, a]);
+  expect(attrs[0]!.array.buffer).toBe(region.blockLight!.opaque.buffer);
+  expect(mesh.byteLength).toBe(48);
+  mesh.dispose();
+});
+
+it("never reuses flat renderer state for smooth attribute layouts", () => {
+  const pool = new RegionMeshPool(3),
+    flat = pooledGeometry(147, true),
+    smooth = pooledGeometry(161, true);
+  smooth.setAttribute("smoothLight", new InstancedBufferAttribute(new Uint32Array(161), 1));
+  const a = pool.acquire(pair, flat);
+  pool.release(a, pair);
+  const b = pool.acquire(pair, smooth);
+  expect(b).not.toBe(a);
+  pool.release(b, pair);
+  const next = pooledGeometry(200, true);
+  next.setAttribute("smoothLight", new InstancedBufferAttribute(new Uint32Array(200), 1));
+  const reused = pool.acquire(pair, next);
+  expect(reused).toBe(b);
+  pool.release(reused, pair);
+  pool.dispose();
+});
+
 function pooledGeometry(count: number, auxiliary: boolean): InstancedBufferGeometry {
   const geometry = new InstancedBufferGeometry();
   geometry.setAttribute("quad", new InstancedBufferAttribute(new Uint32Array(count * 3), 3));

@@ -147,6 +147,9 @@ export class RegionService {
     if (request.blockLightColors !== undefined && typeof request.blockLightColors !== "boolean")
       throw new InvalidRegionError("blockLightColors must be a boolean");
     const colors = !noLight && level <= 1 && request.blockLightColors === true;
+    if (request.blockLightSmooth !== undefined && typeof request.blockLightSmooth !== "boolean")
+      throw new InvalidRegionError("blockLightSmooth must be a boolean");
+    const smooth = !noLight && level <= 1 && request.blockLightSmooth === true;
     const textured = this.options.textures !== undefined;
     if (textured && level !== 0) {
       throw new InvalidRegionError("Textured regions are level 0 only");
@@ -173,7 +176,7 @@ export class RegionService {
 
     // Each vertical window cuts the geometry differently, so it is part of every key; cut-out
     // regions, which keep the faces between leaves, live under their own folder.
-    const key = `${noLight ? "unlit/" : colors ? "colored/" : ""}${cutout ? "cutout/" : ""}${regionCacheKey(context, { level, x, z })}`;
+    const key = `${noLight ? "unlit/" : `${colors ? "colored/" : ""}${smooth ? "smooth/" : ""}`}${cutout ? "cutout/" : ""}${regionCacheKey(context, { level, x, z })}`;
     const remembered = this.memory.get(key);
     if (remembered !== undefined) {
       return {
@@ -190,7 +193,12 @@ export class RegionService {
     }
 
     // Surface builds keep their historical request shape; caves name the whole window.
-    const lighting = noLight ? { blockLight: false } : colors ? { blockLightColors: true } : {};
+    const lighting = noLight
+      ? { blockLight: false }
+      : {
+          ...(colors ? { blockLightColors: true } : {}),
+          ...(smooth ? { blockLightSmooth: true } : {}),
+        };
     const build =
       context.mode === "surface"
         ? { level, x, z, ceilingY: context.ceilingY, ...lighting, ...(cutout ? { cutout } : {}) }

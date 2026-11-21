@@ -39,6 +39,7 @@ import { isOpaqueKind, type VoxelBox } from "./voxel-box.js";
 import type { VoxelRegion } from "./voxel-region.js";
 import { lavaFlowDirection } from "./lava-flow.js";
 import { buildBlockLight } from "./block-light.js";
+import { cornerLight } from "./smooth-light.js";
 
 /**
  * Border faces stay when a neighbor hides them this many layers below its top. A
@@ -91,6 +92,11 @@ class VoxelLevelMesher {
   private readonly opaque: QuadList;
   private readonly translucent: QuadList;
   private readonly light: Uint8Array | undefined;
+  private maskLight: Uint32Array | undefined;
+  private readonly readLight = (index: number, layer: number) =>
+    layer < 0 || layer >= this.box.layers ? 0 : (this.light?.[index] ?? 0);
+  private readonly lightOpaque = (index: number, layer: number) =>
+    layer >= 0 && layer < this.box.layers && this.box.lightOpaque?.[index] === 1;
   /** World y of layer 0, in voxels. */
   private readonly baseLayer: number;
   private low = Number.POSITIVE_INFINITY;
@@ -104,8 +110,8 @@ class VoxelLevelMesher {
     this.box = region.box;
     this.steps = faceSteps(region.box.width);
     this.area = region.box.width ** 2;
-    this.opaque = new QuadList();
-    this.translucent = new QuadList();
+    this.opaque = new QuadList(false, region.blockLightSmooth === true);
+    this.translucent = new QuadList(false, region.blockLightSmooth === true);
     this.baseLayer = region.low / region.voxelSize;
     this.edgeLayers = Math.max(1, EDGE_DEPTH / region.voxelSize);
     this.roof = new Int16Array(this.area).fill(-1);
@@ -148,7 +154,11 @@ class VoxelLevelMesher {
     }
     const { voxelSize } = this.region;
     const empty = new Uint32Array(0);
-    const blockLight = finishBlockLight(this.opaque, new QuadList(), this.translucent);
+    const blockLight = finishBlockLight(
+      this.opaque,
+      new QuadList(false, this.region.blockLightSmooth === true),
+      this.translucent,
+    );
     return {
       level: this.region.level,
       x: this.region.x,
@@ -160,6 +170,9 @@ class VoxelLevelMesher {
       plants: empty,
       translucent: this.translucent.finish(),
       ...(blockLight === undefined ? {} : { blockLight }),
+      ...(blockLight !== undefined && this.region.blockLightSmooth
+        ? { blockLightSmooth: true }
+        : {}),
       ...(blockLight !== undefined && this.region.blockLightColors
         ? { blockLightColors: true }
         : {}),
@@ -218,6 +231,10 @@ class VoxelLevelMesher {
     const layout = sliceLayout(face, span, this.high - this.low + 1);
     const keys = new Uint32Array(layout.slices * layout.area);
     const colors = new Uint32Array(layout.slices * layout.area);
+    this.maskLight =
+      this.region.blockLightSmooth && this.light !== undefined
+        ? new Uint32Array(keys.length)
+        : undefined;
     const used = new Uint8Array(layout.slices);
 
     for (let z = 0; z < span; z += 1) {
@@ -244,9 +261,11 @@ class VoxelLevelMesher {
         keys.subarray(start, start + layout.area),
         colors.subarray(start, start + layout.area),
         layout,
-        (key, color, u, v, width, height) => {
-          this.emit(key, color, face, slice, u, v, width, height);
+        (key, color, u, v, width, height, _texture, light) => {
+          this.emit(key, color, face, slice, u, v, width, height, light);
         },
+        undefined,
+        this.maskLight?.subarray(start, start + layout.area),
       );
     }
   }
@@ -316,7 +335,22 @@ class VoxelLevelMesher {
         ? 0
         : (this.light?.[inner ? index : neighbor] ?? 0);
     keys[mask] =
-      ((covered ? key | KEY_COVERED : key) | lava | (light << KEY_BLOCK_LIGHT_SHIFT)) >>> 0;
+      ((covered ? key | KEY_COVERED : key) |
+        lava |
+        ((this.maskLight === undefined ? light : 0) << KEY_BLOCK_LIGHT_SHIFT)) >>>
+      0;
+    if (this.maskLight !== undefined)
+      this.maskLight[mask] =
+        MATERIALS[kind] === QuadMaterial.Emissive
+          ? 0
+          : cornerLight(
+              this.steps,
+              face,
+              inner ? index : neighbor,
+              frontLayer,
+              this.readLight,
+              this.lightOpaque,
+            );
     colors[mask] = packQuadWord2(this.faceColor(index, face), occlusion);
     return true;
   }
@@ -360,6 +394,7 @@ class VoxelLevelMesher {
     v: number,
     width: number,
     height: number,
+    light?: number,
   ): void {
     const [x, layer, z] = slicePosition(face, slice, u, v, this.low);
     const material = keyMaterial(key);
@@ -371,7 +406,7 @@ class VoxelLevelMesher {
         ((key & KEY_LAVA) !== 0 ? QUAD_LAVA_FLAG | (((key >>> 12) & 15) << 28) : 0),
       color,
       0,
-      (key >>> KEY_BLOCK_LIGHT_SHIFT) & 255,
+      light ?? (key >>> KEY_BLOCK_LIGHT_SHIFT) & 255,
     );
     this.minLayer = Math.min(this.minLayer, y);
     this.maxLayer = Math.max(this.maxLayer, y + (isFlatFace(face) ? 1 : height));
