@@ -96,6 +96,31 @@ function regionResponse(url: URL): Response {
 }
 
 describe("dimension streaming lifecycle", () => {
+  it("uses the same mobile LODs at ratios 1 and 1.25 without changing cache requests", async () => {
+    const camera = new ViewCamera(50, 390 / 844, 1, 4000);
+    camera.position.set(0, 400, 800);
+    camera.lookAt(0, 64, 0);
+    camera.projectionBlend = 1;
+    camera.focusDistance = 900;
+    camera.updateProjectionMatrix();
+    const requestsAt = async (height: number, scale: number) => {
+      const fetcher = vi.fn<typeof fetch>(() => new Promise<Response>(() => {}));
+      vi.stubGlobal("fetch", fetcher);
+      const streamer = stream("overworld", { viewDistance: 1400, maxRequests: 128 });
+      streamer.setDetailScale(scale);
+      streamer.update(camera, height);
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
+      const paths = fetcher.mock.calls
+        .map(([input]) => new URL(input instanceof Request ? input.url : input, "http://local").pathname)
+        .sort((a, b) => a.localeCompare(b));
+      streamer.dispose();
+      return paths;
+    };
+    const reference = await requestsAt(844, 1);
+    expect(await requestsAt(1055, 1.25)).toEqual(reference);
+    expect(await requestsAt(1055, 1)).not.toEqual(reference);
+  });
+
   it("never uses a cached/drawn coarse height as exact Surface evidence", async () => {
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       const [level, x, z] = new URL(String(input), "http://localhost").pathname

@@ -12,6 +12,76 @@ declare global {
 /** Over the fixture's stone platform, below the switch scale. */
 const START = `${WORLD_URL}/?dimension=overworld&x=40&z=8&scale=4`;
 
+test("3D marker anchors share the canvas CSS box across mobile ratios and resize", async ({
+  page,
+}) => {
+  await page.goto(
+    `${WORLD_URL}/?dimension=overworld&x=40&z=8&scale=12&profile=low&mobile=1&discover=off`,
+  );
+  await expect
+    .poll(() => page.evaluate(() => window.__mapelixViewer?.world?.surfaceHeightAt(40, 8)))
+    .not.toBeUndefined();
+  const canvas = page.locator('canvas[aria-label="3D world view"]');
+  for (const ratio of [1.25, 1] as const)
+    for (const projection of ["isometric", "perspective"] as const)
+      for (const automatic of [false, true]) {
+        await page.setViewportSize(
+          automatic ? { width: 844, height: 390 } : { width: 390, height: 844 },
+        );
+        await page.evaluate(
+          ({ ratio, projection, automatic }) => {
+            const v = window.__mapelixViewer!,
+              w = v.world!;
+            v.setMobilePixelRatio(ratio);
+            v.setShowMarkers(true);
+            w.setProjection(projection, false);
+            const y = w.surfaceHeightAt(40, 8)!;
+            w.setCameraView({
+              x: 40.5,
+              y: y + 1,
+              z: 8.5,
+              distance: automatic ? 140 : 80,
+              heading: automatic ? 1.2 : 0.6,
+              pitch: 0.7,
+            });
+            v.markers.set([
+              {
+                id: "css-anchor",
+                label: "CSS anchor",
+                x: 40,
+                z: 8,
+                ...(automatic ? {} : { y: y + 0.5 }),
+              },
+            ]);
+          },
+          { ratio, projection, automatic },
+        );
+        await expect
+          .poll(async () => {
+            const box = await canvas.boundingBox(),
+              overlay = await page.locator(".mx-markers").boundingBox();
+            return box && overlay
+              ? Math.hypot(box.width - overlay.width, box.height - overlay.height)
+              : Infinity;
+          })
+          .toBeLessThan(0.1);
+        await expect
+          .poll(async () => {
+            const box = await canvas.boundingBox();
+            const icon = await page
+              .locator('.mx-marker[aria-label="CSS anchor"] .mx-marker-icon')
+              .boundingBox();
+            return box && icon
+              ? Math.hypot(
+                  icon.x + icon.width / 2 - box.x - box.width / 2,
+                  icon.y + icon.height / 2 - box.y - box.height / 2,
+                )
+              : Infinity;
+          })
+          .toBeLessThan(0.2);
+      }
+});
+
 type Point = { x: number; y: number };
 type Stats = {
   elements: number;

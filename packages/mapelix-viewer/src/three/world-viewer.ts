@@ -342,6 +342,8 @@ export class WorldViewer {
     this.weather = new WeatherLayer(this.atmosphere, options.weather);
     this.weather.setContext(this.context);
     this.renderer = renderer;
+    // The backing buffer uses device pixels; its CSS box must stay aligned with overlays.
+    Object.assign(renderer.domElement.style, { display: "block", width: "100%", height: "100%" });
     container.append(renderer.domElement);
     renderer.domElement.tabIndex = 0;
     renderer.domElement.setAttribute("aria-label", "3D world view");
@@ -640,7 +642,7 @@ export class WorldViewer {
 
   private createStreamer(world: WorldInfo): RegionStreamer {
     const caves = this.context.mode === "caves";
-    return new RegionStreamer({
+    const streamer = new RegionStreamer({
       context: this.context,
       revision: world.revision,
       blockLight: this.blockLight[world.dimension] !== false,
@@ -667,6 +669,8 @@ export class WorldViewer {
         this.regionsChanged = true;
       },
     });
+    streamer.setDetailScale(this.mobileMode ? Math.max(1, this.renderer.getPixelRatio()) : 1);
+    return streamer;
   }
 
   /** Applies all rendering settings before changing the streamer, without intermediate variants. */
@@ -1359,6 +1363,9 @@ export class WorldViewer {
     this.renderer.setSize(width, height, false);
     this.screenWidth = width;
     this.screenHeight = height;
+    // A sharper mobile buffer must not also multiply the amount of terrain geometry.
+    this.streamer.setDetailScale(this.mobileMode ? Math.max(1, this.renderer.getPixelRatio()) : 1);
+    this.regionsChanged = true;
     this.camera.aspect = width / height;
     this.camera.focusDistance = this.rig.distance;
     this.camera.updateProjectionMatrix();
