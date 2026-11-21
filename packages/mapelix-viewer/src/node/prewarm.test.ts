@@ -106,6 +106,14 @@ describe("Prewarmer", () => {
 });
 
 describe("prewarmPlan block light modes", () => {
+  it("prepares both smooth near variants without duplicating distant work", () => {
+    const flat = prewarmPlan(WORLD, 1000),
+      all = prewarmPlan(WORLD, 1000, [true, "smooth", "colored-smooth"]);
+    expect(all.filter((j) => j.level > 1)).toEqual(flat.filter((j) => j.level > 1));
+    const near = flat.filter((j) => j.level <= 1).length;
+    expect(all.filter((j) => j.blockLightSmooth)).toHaveLength(near * 2);
+    expect(all.filter((j) => j.blockLightSmooth && j.blockLightColors)).toHaveLength(near);
+  });
   it("prepares colored near variants without multiplying distant jobs", () => {
     const warm = prewarmPlan(WORLD, 1000),
       all = prewarmPlan(WORLD, 1000, [true, false, "colored"]);

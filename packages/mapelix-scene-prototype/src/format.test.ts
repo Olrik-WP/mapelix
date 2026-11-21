@@ -19,6 +19,37 @@ import {
 } from "./format.js";
 
 describe("scene region format", () => {
+  it.each([false, true])(
+    "round-trips and validates packed corner lights without copies, colored=%s",
+    (colored) => {
+      const empty = new Uint32Array(0),
+        samples = colored ? 0xa5a6a7a8 : 0x05060708;
+      const region = {
+        level: 0,
+        x: 0,
+        z: 0,
+        minY: 0,
+        maxY: 1,
+        heights: new Int16Array(4096),
+        opaque: new Uint32Array(3),
+        plants: empty,
+        translucent: empty,
+        blockLightSmooth: true,
+        blockLightColors: colored,
+        blockLight: { opaque: Uint32Array.of(samples), plants: empty, translucent: empty },
+      };
+      const bytes = encodeSceneRegion(region),
+        decoded = decodeSceneRegion(bytes);
+      expect(decoded.blockLightSmooth).toBe(true);
+      expect(decoded.blockLight!.opaque).toEqual(Uint32Array.of(samples));
+      expect(decoded.blockLight!.opaque.buffer).toBe(bytes.buffer);
+      const { blockLight: _light, ...unlit } = region;
+      expect(bytes.length - encodeSceneRegion(unlit).length).toBe(4);
+      const invalid = bytes.slice();
+      invalid[invalid.length - 1] = colored ? 0x20 : 0x10;
+      expect(() => decodeSceneRegion(invalid)).toThrow(/block-light/);
+    },
+  );
   it("round-trips source families in the same byte plane and rejects color without intensity", () => {
     const empty = new Uint32Array(0);
     const region = {

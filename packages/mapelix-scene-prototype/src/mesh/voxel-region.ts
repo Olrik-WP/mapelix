@@ -14,6 +14,7 @@ const DEEP_ROCK = rgb(118, 116, 112);
  */
 export interface VoxelRegion {
   readonly blockLightColors?: boolean;
+  readonly blockLightSmooth?: boolean;
   readonly window?: VerticalBounds;
   readonly level: number;
   readonly x: number;
@@ -47,6 +48,7 @@ export function buildVoxelRegion(
   window?: VerticalBounds,
   blockLight = true,
   blockLightColors = false,
+  blockLightSmooth = false,
 ): VoxelRegion | undefined {
   const voxelSize = regionCellSize(level);
   const span = regionGridSize(level);
@@ -113,6 +115,7 @@ export function buildVoxelRegion(
     box,
     explored,
     ...(level === 1 && blockLight && blockLightColors ? { blockLightColors: true } : {}),
+    ...(level === 1 && blockLight && blockLightSmooth ? { blockLightSmooth: true } : {}),
     ...(window === undefined ? {} : { window }),
   };
 }

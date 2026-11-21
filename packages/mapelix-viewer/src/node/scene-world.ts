@@ -154,7 +154,7 @@ export type TextureStats =
 
 export interface PrewarmOptions {
   /** Near variants to prepare (default [true]); false adds unlit, "colored" adds source colors. */
-  readonly blockLightModes?: readonly (boolean | "colored")[];
+  readonly blockLightModes?: readonly (boolean | "colored" | "smooth" | "colored-smooth")[];
   /** At most this many Surface regions, coarse levels and the middle of the world first. */
   readonly maxRegions?: number;
   /** Then every discovery index of the stored area (default true). */
@@ -295,7 +295,7 @@ export function createSceneServer(options: SceneServerOptions) {
     | {
         readonly maxRegions: number;
         readonly signal: AbortSignal;
-        readonly blockLightModes: readonly (boolean | "colored")[];
+        readonly blockLightModes: readonly (boolean | "colored" | "smooth" | "colored-smooth")[];
       }
     | undefined;
   const stopPrewarm = new AbortController();
@@ -551,7 +551,7 @@ export function createSceneServer(options: SceneServerOptions) {
     set: TextureSet,
     maxRegions: number,
     signal: AbortSignal,
-    blockLightModes: readonly (boolean | "colored")[],
+    blockLightModes: readonly (boolean | "colored" | "smooth" | "colored-smooth")[],
   ): Promise<PrewarmProgress> {
     stopTexturePrewarm?.abort();
     const stop = new AbortController();
@@ -681,6 +681,9 @@ export function createSceneServer(options: SceneServerOptions) {
       ...(request.blockLightColors === undefined
         ? {}
         : { blockLightColors: request.blockLightColors }),
+      ...(request.blockLightSmooth === undefined
+        ? {}
+        : { blockLightSmooth: request.blockLightSmooth }),
     };
     if (load.textures !== undefined) {
       const set = textureSet;

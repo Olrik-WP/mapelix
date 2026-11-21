@@ -1,9 +1,10 @@
 # Block light
 
-The current binary format is **5**. Optional dominant-source colors keep the
+The current binary format is **6**. Optional dominant-source colors keep the
 same one-byte light plane; the scalar layout below also remains available.
 See [source light colors](colored-block-lighting.md) for flags, GPU cost,
-per-dimension settings and current paired measurements. No smoothing is enabled.
+per-dimension settings and paired measurements. Optional
+[corner smoothing](smooth-block-lighting.md) is disabled by default.
 
 LOD 0 and 1 carry baked block light in Surface and Caves, with or without a texture
 stack. Torches, lanterns, lava, glowstone, campfires, candles and other known vanilla
@@ -59,7 +60,7 @@ cost 6,113 bytes (+7.49% / +5.76%); an extra word would cost 24,452 bytes
 (+29.97% / +23.06%). Texture-only packing would cost no bytes when textured but
 cannot cover plain regions, whose texture stream is absent.
 
-Earlier readers reject the current format 5. Upgrade the scene server and browser bundle
+Earlier readers reject the current format 6. Upgrade the scene server and browser bundle
 together. The engine fingerprint includes the format and changed mesher code,
 so new metadata names a new revision and cache identity. Request paths, query
 parameters, metadata fields and embed API version 5 are unchanged. Hosts that

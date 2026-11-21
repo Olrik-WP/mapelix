@@ -11,10 +11,13 @@ import {
   sRGBTransferEOTF,
   uint,
   varyingProperty,
+  uniformArray,
   vec2,
   vec3,
+  vec4,
 } from "three/tsl";
-import type { Node } from "three/webgpu";
+import { Vector3, type Node } from "three/webgpu";
+import { BLOCK_LIGHT_COLORS } from "@mapelix/scene-prototype/format";
 
 /**
  * Rebuilds packed scene quads on the GPU. Each instance is one quad of three
@@ -29,14 +32,35 @@ export const quadOcclusion = varyingProperty("float", "vQuadOcclusion");
 /** Position inside the quad from (0, 0) to (1, 1), used by plant sprites. */
 export const quadUV = varyingProperty("vec2", "vQuadUV");
 const materialCode = varyingProperty("float", "vQuadMaterial");
+const coveredCode = varyingProperty("float", "vQuadCovered");
+const heightCode = varyingProperty("float", "vQuadHeight");
+const smoothShape = varyingProperty("uint", "vQuadShape");
+export const quadLightPalette = uniformArray<"vec3">(
+  BLOCK_LIGHT_COLORS.map((value) => new Vector3(...value)),
+  "vec3",
+);
+/** RGB weighted by light level, plus that level. Interpolation stays below the varying limit. */
+export const quadSmoothLight = varyingProperty("vec4", "vQuadSmoothLight");
 /** `QuadMaterial` code of the face, rounded because interpolation can leave it slightly off. */
-export const quadMaterial = materialCode.round();
+export const quadMaterial = Fn((builder) =>
+  builder.geometry.hasAttribute("smoothLight")
+    ? float(smoothShape.shiftRight(uint(10)).bitAnd(uint(15)))
+    : materialCode.round(),
+)();
 /** `PlantSprite` code of the face. */
 export const quadSprite = varyingProperty("float", "vQuadSprite");
 /** 1 for covered soil sides, which draw soil below a strip of the quad color. */
-export const quadCovered = varyingProperty("float", "vQuadCovered");
+export const quadCovered = Fn((builder) =>
+  builder.geometry.hasAttribute("smoothLight")
+    ? float(smoothShape.shiftRight(uint(9)).bitAnd(uint(1)))
+    : coveredCode,
+)();
 /** Quad size in blocks along its second tangent, which is height for side faces. */
-export const quadHeight = varyingProperty("float", "vQuadHeight");
+export const quadHeight = Fn((builder) =>
+  builder.geometry.hasAttribute("smoothLight")
+    ? float(smoothShape.bitAnd(uint(511))).add(1)
+    : heightCode,
+)();
 /** Per-face integer data: flow/texture in 0..18, source color in 23..26, light in 27..30. Integer varyings
  * are flat on WebGPU and WebGL 2, so interpolation cannot corrupt texture flags. */
 export const quadPackedData = varyingProperty("uint", "vQuadLavaFlow");
@@ -130,10 +154,27 @@ export const quadPosition = Fn((builder) => {
   quadColor.assign(sRGBTransferEOTF(color));
   quadOcclusion.assign(select(plant, float(1), occlusionCurve(cornerOcclusion)));
   quadUV.assign(vec2(cornerU, cornerV));
-  materialCode.assign(bits(word0, 26, 15));
+  if (builder.geometry.hasAttribute("smoothLight")) {
+    // Three shape scalars share one integer only in this layout, freeing space
+    // for the interpolated light without changing the default shader path.
+    smoothShape.assign(
+      uint(height.sub(1))
+        .bitOr(uint(bits(word0, 30, 1)).shiftLeft(uint(9)))
+        .bitOr(word0.shiftRight(uint(26)).bitAnd(uint(15)).shiftLeft(uint(10))),
+    );
+    const sample = uint(attribute("smoothLight", "uint"))
+      .shiftRight(uint(corner.mul(8)))
+      .bitAnd(uint(255));
+    const strength = float(sample.bitAnd(uint(15))).div(15);
+    quadSmoothLight.assign(
+      vec4(quadLightPalette.element(sample.shiftRight(uint(4))).mul(strength), strength),
+    );
+  } else {
+    materialCode.assign(bits(word0, 26, 15));
+    coveredCode.assign(bits(word0, 30, 1));
+    heightCode.assign(height);
+  }
   quadSprite.assign(bits(word1, 24, 7));
-  quadCovered.assign(bits(word0, 30, 1));
-  quadHeight.assign(height);
   const data = builder.geometry.hasAttribute("texture")
     ? uint(attribute("texture", "uint"))
     : uint(0);

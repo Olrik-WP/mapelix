@@ -109,6 +109,8 @@ export interface WorldViewerOptions {
   readonly blockLight?: BlockLightSettings;
   /** Dominant-source light colors per dimension (default disabled). */
   readonly blockLightColors?: BlockLightSettings;
+  /** Corner light interpolation per dimension (default disabled). */
+  readonly blockLightSmooth?: BlockLightSettings;
   /** Animated block clouds in Overworld Surface views (default true). */
   readonly clouds?: boolean;
   /** Cosmetic Overworld Surface weather only, independent of the server (default clear). */
@@ -269,6 +271,7 @@ export class WorldViewer {
   private textureMode: TextureMode = "off";
   private blockLight: BlockLightSettings = {};
   private blockLightColors: BlockLightSettings = {};
+  private blockLightSmooth: BlockLightSettings = {};
   private leafMode: LeafMode = "fast";
   private textureState: TextureState = "off";
   private textureFade: TextureFade = DEFAULT_TEXTURE_FADE;
@@ -297,6 +300,7 @@ export class WorldViewer {
     this.options = options;
     this.blockLight = { ...options.blockLight };
     this.blockLightColors = { ...options.blockLightColors };
+    this.blockLightSmooth = { ...options.blockLightSmooth };
     this.depthFollow = new DepthFollow(
       options.loadDepth,
       (next) => {
@@ -618,6 +622,7 @@ export class WorldViewer {
       revision: world.revision,
       blockLight: this.blockLight[world.dimension] !== false,
       blockLightColors: this.blockLightColors[world.dimension] === true,
+      blockLightSmooth: this.blockLightSmooth[world.dimension] === true,
       ...(this.options.regionBase === undefined ? {} : { regionBase: this.options.regionBase }),
       ...(this.options.regionSuffix === undefined
         ? {}
@@ -656,6 +661,19 @@ export class WorldViewer {
       throw new RangeError("Block light colors need a boolean and a vanilla dimension");
     const previous = this.blockLightColors[dimension] === true;
     this.blockLightColors = { ...this.blockLightColors, [dimension]: enabled };
+    if (
+      previous !== enabled &&
+      dimension === this.context.dimension &&
+      this.blockLight[dimension] !== false
+    )
+      this.reloadLighting();
+  }
+
+  setBlockLightSmooth(enabled: boolean, dimension: Dimension = this.context.dimension): void {
+    if (typeof enabled !== "boolean" || !Object.hasOwn(DIMENSIONS, dimension))
+      throw new RangeError("Smooth block light needs a boolean and a vanilla dimension");
+    const previous = this.blockLightSmooth[dimension] === true;
+    this.blockLightSmooth = { ...this.blockLightSmooth, [dimension]: enabled };
     if (
       previous !== enabled &&
       dimension === this.context.dimension &&

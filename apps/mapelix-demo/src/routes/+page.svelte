@@ -43,7 +43,7 @@
         result.weather = stored.weather;
       if (typeof stored.autoDepth === "boolean") result.autoDepth = stored.autoDepth;
       if (typeof stored.showFps === "boolean") result.showFps = stored.showFps;
-      for (const key of ["blockLight", "blockLightColors"] as const) {
+      for (const key of ["blockLight", "blockLightColors", "blockLightSmooth"] as const) {
         if (stored[key] === null || typeof stored[key] !== "object") continue;
         const modes = stored[key] as Record<string, unknown>;
         result[key] = Object.fromEntries(
@@ -144,6 +144,7 @@
             showFps: settings.showFps,
             blockLight: settings.blockLight,
             blockLightColors: settings.blockLightColors,
+            blockLightSmooth: settings.blockLightSmooth,
           });
           if (preferences !== lastPreferences) {
             lastPreferences = preferences;

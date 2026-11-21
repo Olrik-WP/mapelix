@@ -2,6 +2,24 @@ import { expect, it } from "vitest";
 import { DEFAULT_WORLD_SETTINGS, type MapelixViewer } from "./mapelix-viewer.js";
 import { startFromSearch, viewerSearch } from "./url-state.js";
 
+it("keeps smoothing off by default and independent per dimension", () => {
+  expect(DEFAULT_WORLD_SETTINGS.blockLightSmooth).toEqual({});
+  expect(startFromSearch(new URLSearchParams()).settings.blockLightSmooth).toBeUndefined();
+  const start = startFromSearch(
+    new URLSearchParams("blockLightSmooth=overworld&blockLightColors=nether"),
+  );
+  expect(start.settings.blockLightSmooth).toEqual({
+    overworld: true,
+    nether: false,
+    "the-end": false,
+  });
+  expect(start.settings.blockLightColors).toEqual({
+    overworld: false,
+    nether: true,
+    "the-end": false,
+  });
+});
+
 it("round-trips light colors independently of each dimension's light switch", () => {
   const settings = {
     ...DEFAULT_WORLD_SETTINGS,

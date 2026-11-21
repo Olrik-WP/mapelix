@@ -35,11 +35,17 @@ export interface PrewarmTarget {
 export function prewarmPlan(
   dimensions: ReadonlyMap<Dimension, BlockBounds | undefined>,
   maxRegions: number,
-  blockLightModes: readonly (boolean | "colored")[] = [true],
+  blockLightModes: readonly (boolean | "colored" | "smooth" | "colored-smooth")[] = [true],
 ): PrewarmJob[] {
   if (
     blockLightModes.length === 0 ||
-    blockLightModes.some((mode) => typeof mode !== "boolean" && mode !== "colored")
+    blockLightModes.some(
+      (mode) =>
+        typeof mode !== "boolean" &&
+        mode !== "colored" &&
+        mode !== "smooth" &&
+        mode !== "colored-smooth",
+    )
   )
     throw new RangeError("blockLightModes needs true, false or colored");
   const modes = [...new Set(blockLightModes)];
@@ -70,8 +76,12 @@ export function prewarmPlan(
           jobs.push(
             enabled === false
               ? { ...job, blockLight: false }
-              : enabled === "colored"
-                ? { ...job, blockLightColors: true }
+              : typeof enabled === "string"
+                ? {
+                    ...job,
+                    ...(enabled !== "smooth" ? { blockLightColors: true } : {}),
+                    ...(enabled !== "colored" ? { blockLightSmooth: true } : {}),
+                  }
                 : job,
           );
         }

@@ -39,7 +39,7 @@ export const QUAD_LAVA_FLAG = 1 << 27;
 
 export const REGION_MAGIC = 0x3153_584d; // "MXS1" in little-endian byte order.
 export { BLOCK_LIGHT_COLORS } from "./block-light-colors.js";
-export const REGION_FORMAT_VERSION = 5;
+export const REGION_FORMAT_VERSION = 6;
 export const REGION_HEADER_BYTES = 40;
 /** Header byte 7: the region carries a texture word per quad. */
 export const REGION_FLAG_TEXTURED = 1;
@@ -47,6 +47,9 @@ export const REGION_FLAG_TEXTURED = 1;
 export const REGION_FLAG_BLOCK_LIGHT = 2;
 /** Light bytes pack a 0..15 level in the low nibble and a color family in the high nibble. */
 export const REGION_FLAG_BLOCK_LIGHT_COLORS = 4;
+/** Four corner bytes replace the single light byte per quad. */
+export const REGION_FLAG_BLOCK_LIGHT_SMOOTH = 8;
+export type RegionLightValues = Uint8Array | Uint32Array;
 /** Height map value for a cell without any stored blocks. */
 export const EMPTY_HEIGHT = -32768;
 /** Lowest overworld block. Quads store their cell y minus `WORLD_MIN_Y` in nine bits. */
@@ -176,7 +179,7 @@ export function isLavaQuad(word0: number, word1: number): boolean {
 export function partitionLavaQuads(
   words: Uint32Array,
   textures?: Uint32Array,
-  blockLight?: Uint8Array,
+  blockLight?: RegionLightValues,
 ): Uint32Array {
   let first = 0;
   let last = words.length / 3 - 1;
@@ -245,11 +248,13 @@ export function unpackQuad(words: Uint32Array, index: number): Quad {
 export class QuadList {
   private words = new Uint32Array(3 * 256);
   private textures: Uint32Array | undefined;
-  private blockLight: Uint8Array | undefined;
+  private blockLight: RegionLightValues | undefined;
+  readonly smoothLight: boolean;
   private lit = false;
   private length = 0;
 
-  constructor(textured = false) {
+  constructor(textured = false, smoothLight = false) {
+    this.smoothLight = smoothLight;
     if (textured) this.textures = new Uint32Array(256);
   }
 
@@ -259,7 +264,9 @@ export class QuadList {
 
   push(word0: number, word1: number, word2: number, texture = 0, light = 0): void {
     if (light > 0 && this.blockLight === undefined)
-      this.blockLight = new Uint8Array(this.words.length / 3);
+      this.blockLight = this.smoothLight
+        ? new Uint32Array(this.words.length / 3)
+        : new Uint8Array(this.words.length / 3);
     if (this.length + 3 > this.words.length) {
       const grown = new Uint32Array(this.words.length * 2);
       grown.set(this.words);
@@ -270,7 +277,9 @@ export class QuadList {
         this.textures = textures;
       }
       if (this.blockLight !== undefined) {
-        const levels = new Uint8Array(this.blockLight.length * 2);
+        const levels = this.smoothLight
+          ? new Uint32Array(this.blockLight.length * 2)
+          : new Uint8Array(this.blockLight.length * 2);
         levels.set(this.blockLight);
         this.blockLight = levels;
       }
@@ -295,7 +304,7 @@ export class QuadList {
     return this.textures?.slice(0, this.length / 3);
   }
 
-  finishBlockLight(): Uint8Array | undefined {
+  finishBlockLight(): RegionLightValues | undefined {
     return this.lit ? this.blockLight?.slice(0, this.count) : undefined;
   }
 }
@@ -311,17 +320,23 @@ export function finishBlockLight(
   const c = translucent.finishBlockLight();
   if (a === undefined && b === undefined && c === undefined) return undefined;
   return {
-    opaque: a ?? new Uint8Array(opaque.count),
-    plants: b ?? new Uint8Array(plants.count),
-    translucent: c ?? new Uint8Array(translucent.count),
+    opaque:
+      a ?? (opaque.smoothLight ? new Uint32Array(opaque.count) : new Uint8Array(opaque.count)),
+    plants:
+      b ?? (plants.smoothLight ? new Uint32Array(plants.count) : new Uint8Array(plants.count)),
+    translucent:
+      c ??
+      (translucent.smoothLight
+        ? new Uint32Array(translucent.count)
+        : new Uint8Array(translucent.count)),
   };
 }
 
 /** One light byte per quad: level 0..15, optionally with a high-nibble color family. */
 export interface RegionBlockLight {
-  readonly opaque: Uint8Array;
-  readonly plants: Uint8Array;
-  readonly translucent: Uint8Array;
+  readonly opaque: RegionLightValues;
+  readonly plants: RegionLightValues;
+  readonly translucent: RegionLightValues;
 }
 
 /** One texture word per quad of each array, for a textured region. */
@@ -350,6 +365,7 @@ export interface SceneRegion {
   readonly blockLight?: RegionBlockLight;
   /** Optional color families in the existing light byte plane. */
   readonly blockLightColors?: boolean;
+  readonly blockLightSmooth?: boolean;
 }
 
 /** A decoded region whose typed arrays view the original bytes without copying. */
@@ -375,6 +391,15 @@ export function regionGridSize(level: number): number {
   return regionSpan(level) / regionCellSize(level);
 }
 
+function validLight(value: number, colors: boolean, smooth: boolean): boolean {
+  if (!smooth) return colors ? value === 0 || (value & 15) !== 0 : value <= 15;
+  for (let i = 0; i < (smooth ? 4 : 1); i++, value >>>= 8) {
+    const code = value & 255;
+    if (colors ? code !== 0 && (code & 15) === 0 : code > 15) return false;
+  }
+  return true;
+}
+
 export function encodeSceneRegion(region: SceneRegion): Uint8Array {
   const gridSize = regionGridSize(region.level);
   const quadWords = region.opaque.length + region.plants.length + region.translucent.length;
@@ -390,17 +415,22 @@ export function encodeSceneRegion(region: SceneRegion): Uint8Array {
   const textureWords = textures === undefined ? 0 : quadWords / 3;
   if (blockLight !== undefined) {
     for (const layer of ["opaque", "plants", "translucent"] as const) {
-      if (blockLight[layer].length * 3 !== region[layer].length)
+      if (
+        blockLight[layer].length * 3 !== region[layer].length ||
+        blockLight[layer].BYTES_PER_ELEMENT !== (region.blockLightSmooth ? 4 : 1)
+      )
         throw new RangeError("A lit region needs one block-light byte per quad");
       if (
-        blockLight[layer].some((level) =>
-          region.blockLightColors ? level !== 0 && (level & 15) === 0 : level > 15,
+        blockLight[layer].some(
+          (level) =>
+            !validLight(level, region.blockLightColors === true, region.blockLightSmooth === true),
         )
       )
         throw new RangeError("Block light must be in 0..15");
     }
   }
-  const lightBytes = blockLight === undefined ? 0 : quadWords / 3;
+  const lightBytes =
+    blockLight === undefined ? 0 : (quadWords / 3) * (region.blockLightSmooth ? 4 : 1);
   const bytes = new Uint8Array(
     REGION_HEADER_BYTES + gridSize * gridSize * 2 + (quadWords + textureWords) * 4 + lightBytes,
   );
@@ -412,7 +442,8 @@ export function encodeSceneRegion(region: SceneRegion): Uint8Array {
     7,
     (textures === undefined ? 0 : REGION_FLAG_TEXTURED) |
       (blockLight === undefined ? 0 : REGION_FLAG_BLOCK_LIGHT) |
-      (blockLight !== undefined && region.blockLightColors ? REGION_FLAG_BLOCK_LIGHT_COLORS : 0),
+      (blockLight !== undefined && region.blockLightColors ? REGION_FLAG_BLOCK_LIGHT_COLORS : 0) |
+      (blockLight !== undefined && region.blockLightSmooth ? REGION_FLAG_BLOCK_LIGHT_SMOOTH : 0),
   );
   view.setInt32(8, region.x, true);
   view.setInt32(12, region.z, true);
@@ -436,8 +467,8 @@ export function encodeSceneRegion(region: SceneRegion): Uint8Array {
   }
   if (blockLight !== undefined) {
     for (const layer of [blockLight.opaque, blockLight.plants, blockLight.translucent]) {
-      bytes.set(layer, offset);
-      offset += layer.length;
+      bytes.set(new Uint8Array(layer.buffer, layer.byteOffset, layer.byteLength), offset);
+      offset += layer.byteLength;
     }
   }
   return bytes;
@@ -461,14 +492,22 @@ export function decodeSceneRegion(bytes: Uint8Array): DecodedSceneRegion {
   const level = view.getUint8(6);
   const flags = view.getUint8(7);
   if (
-    (flags & ~(REGION_FLAG_TEXTURED | REGION_FLAG_BLOCK_LIGHT | REGION_FLAG_BLOCK_LIGHT_COLORS)) !==
+    (flags &
+      ~(
+        REGION_FLAG_TEXTURED |
+        REGION_FLAG_BLOCK_LIGHT |
+        REGION_FLAG_BLOCK_LIGHT_COLORS |
+        REGION_FLAG_BLOCK_LIGHT_SMOOTH
+      )) !==
     0
   )
     throw new Error(`Unknown scene region flags ${flags}`);
   const textured = (flags & REGION_FLAG_TEXTURED) !== 0;
   const lit = (flags & REGION_FLAG_BLOCK_LIGHT) !== 0;
   const colors = (flags & REGION_FLAG_BLOCK_LIGHT_COLORS) !== 0;
+  const smooth = (flags & REGION_FLAG_BLOCK_LIGHT_SMOOTH) !== 0;
   if (colors && !lit) throw new Error("Colored block light needs a light plane");
+  if (smooth && !lit) throw new Error("Smooth block light needs a light plane");
   const x = view.getInt32(8, true);
   const z = view.getInt32(12, true);
   const gridSize = regionGridSize(level);
@@ -479,7 +518,7 @@ export function decodeSceneRegion(bytes: Uint8Array): DecodedSceneRegion {
   const expected =
     REGION_HEADER_BYTES +
     gridSize * gridSize * 2 +
-    quadCount * ((textured ? 16 : 12) + (lit ? 1 : 0));
+    quadCount * ((textured ? 16 : 12) + (lit ? (smooth ? 4 : 1) : 0));
   if (bytes.byteLength !== expected) {
     throw new Error(`Scene region has ${bytes.byteLength} bytes, expected ${expected}`);
   }
@@ -507,10 +546,12 @@ export function decodeSceneRegion(bytes: Uint8Array): DecodedSceneRegion {
         translucent: takeTextures(translucentCount),
       }
     : undefined;
-  const takeLight = (count: number): Uint8Array => {
-    const levels = new Uint8Array(bytes.buffer, offset, count);
-    offset += count;
-    if (levels.some((level) => (colors ? level !== 0 && (level & 15) === 0 : level > 15)))
+  const takeLight = (count: number): RegionLightValues => {
+    const levels = smooth
+      ? new Uint32Array(bytes.buffer, offset, count)
+      : new Uint8Array(bytes.buffer, offset, count);
+    offset += levels.byteLength;
+    if (levels.some((level) => !validLight(level, colors, smooth)))
       throw new Error("Invalid block-light level");
     return levels;
   };
@@ -539,6 +580,7 @@ export function decodeSceneRegion(bytes: Uint8Array): DecodedSceneRegion {
     ...(textures === undefined ? {} : { textures }),
     ...(blockLight === undefined ? {} : { blockLight }),
     ...(colors ? { blockLightColors: true } : {}),
+    ...(smooth ? { blockLightSmooth: true } : {}),
   };
 }
 

@@ -35,7 +35,7 @@ export function faceSteps(size: number): FaceSteps {
 }
 
 /** Occlusion corners in quad order: (0, 0), (1, 0), (1, 1), (0, 1) along the tangents. */
-const CORNERS = [
+export const CORNERS = [
   [-1, -1],
   [1, -1],
   [1, 1],
@@ -174,6 +174,7 @@ export type EmitRectangle = (
   width: number,
   height: number,
   texture: number,
+  light?: number,
 ) => void;
 
 /**
@@ -187,7 +188,12 @@ export function mergeSlice(
   layout: SliceLayout,
   emit: EmitRectangle,
   textures?: Uint32Array,
+  lights?: Uint32Array,
 ): void {
+  if (lights !== undefined) {
+    mergeSmoothSlice(face, keys, colors, layout, emit, lights, textures);
+    return;
+  }
   const { uSize, vSize } = layout;
   const flat = isFlatFace(face);
   for (let v = 0; v < vSize; v += 1) {
@@ -230,6 +236,81 @@ export function mergeSlice(
       emit(key, color, u, v, width, height, texture);
     }
   }
+}
+
+/** Merge only gradients whose interior grid vertices match the larger quad exactly. */
+function mergeSmoothSlice(
+  face: number,
+  keys: Uint32Array,
+  colors: Uint32Array,
+  layout: SliceLayout,
+  emit: EmitRectangle,
+  lights: Uint32Array,
+  textures?: Uint32Array,
+): void {
+  const { uSize, vSize } = layout;
+  for (let v = 0; v < vSize; v++)
+    for (let u = 0; u < uSize; u++) {
+      const start = v * uSize + u,
+        key = keys[start]!;
+      if (key === 0) continue;
+      const color = colors[start]!,
+        texture = textures?.[start] ?? 0,
+        word = lights[start]!;
+      const a = word & 255,
+        b = (word >>> 8) & 255,
+        c = (word >>> 16) & 255,
+        d = word >>> 24;
+      const family = a & 240,
+        base = a & 15,
+        du = (b & 15) - base,
+        dv = (d & 15) - base;
+      const linear =
+        (b & 240) === family &&
+        (c & 240) === family &&
+        (d & 240) === family &&
+        (c & 15) === base + du + dv;
+      const packed = (x: number, y: number, width = 1, height = 1): number => {
+        const low = base + du * x + dv * y;
+        const right = low + du * width,
+          top = low + dv * height,
+          diagonal = right + dv * height;
+        const min = Math.min(low, right, top, diagonal),
+          max = Math.max(low, right, top, diagonal);
+        if (min < 0 || max > 15 || (min === 0 && family !== 0)) return -1;
+        return (
+          (family |
+            low |
+            ((family | right) << 8) |
+            ((family | diagonal) << 16) |
+            ((family | top) << 24)) >>>
+          0
+        );
+      };
+      const matches = (x: number, y: number): boolean => {
+        const index = (v + y) * uSize + u + x;
+        return (
+          keys[index] === key &&
+          colors[index] === color &&
+          (textures === undefined || textures[index] === texture) &&
+          lights[index] === packed(x, y)
+        );
+      };
+      let width = 1,
+        height = 1;
+      if (linear && (key & KEY_SINGLE) === 0) {
+        if ((key & KEY_NARROW) === 0) while (u + width < uSize && matches(width, 0)) width++;
+        if (isFlatFace(face) || (key & KEY_STACKS) !== 0) {
+          rows: while (v + height < vSize) {
+            for (let x = 0; x < width; x++) if (!matches(x, height)) break rows;
+            height++;
+          }
+        }
+      }
+      for (let row = 0; row < height; row++)
+        keys.fill(0, (v + row) * uSize + u, (v + row) * uSize + u + width);
+      emit(key, color, u, v, width, height, texture, linear ? packed(0, 0, width, height) : word);
+    }
 }
 
 function rowMatches(

@@ -1,11 +1,10 @@
-import { BLOCK_LIGHT_COLORS, QuadMaterial, SOIL_COLOR } from "@mapelix/scene-prototype/format";
+import { QuadMaterial, SOIL_COLOR } from "@mapelix/scene-prototype/format";
 import {
   DoubleSide,
   MeshBasicNodeMaterial,
   MeshLambertNodeMaterial,
   MeshStandardNodeMaterial,
   Vector2,
-  Vector3,
   type Material,
   type Node,
   type NodeMaterial,
@@ -45,7 +44,6 @@ import {
   time,
   transformNormalToView,
   uniform,
-  uniformArray,
   vec2,
   vec3,
   viewportDepthTexture,
@@ -59,6 +57,8 @@ import {
   quadColor,
   quadBlockLight,
   quadBlockLightColor,
+  quadLightPalette,
+  quadSmoothLight,
   quadCovered,
   quadHeight,
   quadMaterial,
@@ -168,21 +168,21 @@ const blockBevel = Fn(() => {
 const soil = color(SOIL_COLOR);
 
 /** Baked local fill, sharing the packed quad varying; sun, shadows and weather stay dynamic. */
-const sourceColors = uniformArray<"vec3">(
-  BLOCK_LIGHT_COLORS.map((value) => new Vector3(...value)),
-  "vec3",
-);
 const sourceLightColor = Fn((builder) =>
   builder.geometry.hasAttribute("light")
-    ? sourceColors.element(quadBlockLightColor)
+    ? quadLightPalette.element(quadBlockLightColor)
     : vec3(1, 0.78, 0.5),
+);
+
+const bakedLight = Fn((builder) =>
+  builder.geometry.hasAttribute("smoothLight")
+    ? quadSmoothLight.rgb.mul(quadSmoothLight.w)
+    : sourceLightColor().mul(quadBlockLight.pow(2)),
 );
 
 function blockLight(atmosphere: Atmosphere): Node<"vec3"> {
   const surfaceDay = atmosphere.daylight.mul(select(atmosphere.environment.equal(0), 1, 0));
-  return sourceLightColor()
-    .mul(quadBlockLight.pow(2))
-    .mul(mix(1.5, 0.3, surfaceDay));
+  return bakedLight().mul(mix(1.5, 0.3, surfaceDay));
 }
 
 /**
