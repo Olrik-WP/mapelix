@@ -5,29 +5,33 @@ import { renderProfileSettings } from "./render-profile.js";
 
 it("keeps mobile rendering and marker visibility independent of LOW/HD", () => {
   for (const profile of ["low", "hd"] as const) {
-    const settings = {
-      ...DEFAULT_WORLD_SETTINGS,
-      ...renderProfileSettings(profile),
-      renderProfile: profile,
-      mobileMode: true,
-      mobilePixelRatio: 1 as const,
-      showMarkers: false,
-    };
-    const viewer = {
-      settings,
-      view: { dimension: "overworld", x: 0, z: 0, pixelsPerBlock: 12, projection: "isometric" },
-    } as unknown as MapelixViewer;
-    expect(startFromSearch(viewerSearch(viewer)).settings).toMatchObject({
-      renderProfile: profile,
-      mobileMode: true,
-      mobilePixelRatio: 1,
-      showMarkers: false,
-      ...renderProfileSettings(profile),
-    });
+    for (const mobilePixelRatio of [1, 1.25] as const) {
+      const settings = {
+        ...DEFAULT_WORLD_SETTINGS,
+        ...renderProfileSettings(profile),
+        renderProfile: profile,
+        mobileMode: true,
+        mobilePixelRatio,
+        showMarkers: false,
+      };
+      const viewer = {
+        settings,
+        view: { dimension: "overworld", x: 0, z: 0, pixelsPerBlock: 12, projection: "isometric" },
+      } as unknown as MapelixViewer;
+      const search = viewerSearch(viewer);
+      expect(search.get("mobileRatio")).toBe(mobilePixelRatio === 1 ? null : "1.25");
+      expect({ ...DEFAULT_WORLD_SETTINGS, ...startFromSearch(search).settings }).toMatchObject({
+        renderProfile: profile,
+        mobileMode: true,
+        mobilePixelRatio,
+        showMarkers: false,
+        ...renderProfileSettings(profile),
+      });
+    }
   }
   expect(DEFAULT_WORLD_SETTINGS).toMatchObject({
     mobileMode: false,
-    mobilePixelRatio: 1.25,
+    mobilePixelRatio: 1,
     showMarkers: true,
   });
   expect(
