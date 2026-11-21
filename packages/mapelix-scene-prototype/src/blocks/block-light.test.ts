@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { blockEmission } from "./block-light.js";
+import { blockEmission, blockEmissionColor } from "./block-light.js";
 import { BlockPalette } from "../mesh/block-palette.js";
 
 it.each([
@@ -43,4 +43,18 @@ it("keeps lighting states distinct in both palette modes, including boolean stat
       0, 3, 12, 0, 15,
     ]);
   }
+});
+
+it.each([
+  ["torch", 0],
+  ["soul_lantern", 1],
+  ["portal", 2],
+  ["lava", 3],
+  ["redstone_torch", 4],
+  ["sea_lantern", 5],
+  ["verdant_froglight", 7],
+  ["pearlescent_froglight", 8],
+  ["ochre_froglight", 9],
+] as const)("assigns a texture-independent light family to %s", (name, family) => {
+  expect(blockEmissionColor(`minecraft:${name}`)).toBe(family);
 });

@@ -1,0 +1,360 @@
+{
+  "node": "v24.14.1",
+  "method": "same copied snapshot; seven alternating builds, two warmups; median of five; gzip is an estimate, not HTTP traffic",
+  "rows": [
+    {
+      "dimension": "overworld",
+      "level": 0,
+      "x": -4,
+      "z": 3,
+      "textured": false,
+      "versions": [
+        {
+          "quads": 29433,
+          "bytes": 390861,
+          "gzipBytes": 104380,
+          "lightBytes": 29433,
+          "coloredFaces": 0,
+          "coldMs": 144.14,
+          "warmMedianMs": 55.37
+        },
+        {
+          "quads": 29452,
+          "bytes": 391108,
+          "gzipBytes": 105262,
+          "lightBytes": 29452,
+          "coloredFaces": 5702,
+          "coldMs": 131.24,
+          "warmMedianMs": 52.64
+        }
+      ],
+      "quadChangePercent": 0.065,
+      "byteChangePercent": 0.063,
+      "warmTimeChangePercent": -4.93
+    },
+    {
+      "dimension": "overworld",
+      "level": 0,
+      "x": -4,
+      "z": 3,
+      "textured": true,
+      "versions": [
+        {
+          "quads": 29810,
+          "bytes": 515002,
+          "gzipBytes": 113019,
+          "lightBytes": 29810,
+          "coloredFaces": 0,
+          "coldMs": 91.24,
+          "warmMedianMs": 51.34
+        },
+        {
+          "quads": 29829,
+          "bytes": 515325,
+          "gzipBytes": 113886,
+          "lightBytes": 29829,
+          "coloredFaces": 5726,
+          "coldMs": 94.98,
+          "warmMedianMs": 53.1
+        }
+      ],
+      "quadChangePercent": 0.064,
+      "byteChangePercent": 0.063,
+      "warmTimeChangePercent": 3.428
+    },
+    {
+      "dimension": "overworld",
+      "level": 0,
+      "x": -3,
+      "z": 3,
+      "textured": false,
+      "versions": [
+        {
+          "quads": 26826,
+          "bytes": 356970,
+          "gzipBytes": 105736,
+          "lightBytes": 26826,
+          "coloredFaces": 0,
+          "coldMs": 85.74,
+          "warmMedianMs": 59.9
+        },
+        {
+          "quads": 26845,
+          "bytes": 357217,
+          "gzipBytes": 105993,
+          "lightBytes": 26845,
+          "coloredFaces": 713,
+          "coldMs": 86.25,
+          "warmMedianMs": 62.29
+        }
+      ],
+      "quadChangePercent": 0.071,
+      "byteChangePercent": 0.069,
+      "warmTimeChangePercent": 3.99
+    },
+    {
+      "dimension": "overworld",
+      "level": 0,
+      "x": -3,
+      "z": 3,
+      "textured": true,
+      "versions": [
+        {
+          "quads": 27258,
+          "bytes": 471618,
+          "gzipBytes": 118217,
+          "lightBytes": 27258,
+          "coloredFaces": 0,
+          "coldMs": 96.53,
+          "warmMedianMs": 60.65
+        },
+        {
+          "quads": 27277,
+          "bytes": 471941,
+          "gzipBytes": 118530,
+          "lightBytes": 27277,
+          "coloredFaces": 713,
+          "coldMs": 90.6,
+          "warmMedianMs": 61.27
+        }
+      ],
+      "quadChangePercent": 0.07,
+      "byteChangePercent": 0.068,
+      "warmTimeChangePercent": 1.022
+    },
+    {
+      "dimension": "overworld",
+      "level": 1,
+      "x": -2,
+      "z": 1,
+      "textured": false,
+      "versions": [
+        {
+          "quads": 63487,
+          "bytes": 858139,
+          "gzipBytes": 254816,
+          "lightBytes": 63487,
+          "coloredFaces": 0,
+          "coldMs": 373.25,
+          "warmMedianMs": 303.13
+        },
+        {
+          "quads": 63520,
+          "bytes": 858568,
+          "gzipBytes": 256506,
+          "lightBytes": 63520,
+          "coloredFaces": 8093,
+          "coldMs": 375.58,
+          "warmMedianMs": 306.61
+        }
+      ],
+      "quadChangePercent": 0.052,
+      "byteChangePercent": 0.05,
+      "warmTimeChangePercent": 1.148
+    },
+    {
+      "dimension": "nether",
+      "level": 0,
+      "x": 0,
+      "z": 0,
+      "textured": false,
+      "versions": [
+        {
+          "quads": 10116,
+          "bytes": 139740,
+          "gzipBytes": 41953,
+          "lightBytes": 10116,
+          "coloredFaces": 0,
+          "coldMs": 85.26,
+          "warmMedianMs": 55.56
+        },
+        {
+          "quads": 10140,
+          "bytes": 140052,
+          "gzipBytes": 42298,
+          "lightBytes": 10140,
+          "coloredFaces": 8669,
+          "coldMs": 78.59,
+          "warmMedianMs": 57.4
+        }
+      ],
+      "quadChangePercent": 0.237,
+      "byteChangePercent": 0.223,
+      "warmTimeChangePercent": 3.312
+    },
+    {
+      "dimension": "nether",
+      "level": 0,
+      "x": 0,
+      "z": 0,
+      "textured": true,
+      "versions": [
+        {
+          "quads": 10132,
+          "bytes": 180476,
+          "gzipBytes": 44907,
+          "lightBytes": 10132,
+          "coloredFaces": 0,
+          "coldMs": 75.37,
+          "warmMedianMs": 57.6
+        },
+        {
+          "quads": 10156,
+          "bytes": 180884,
+          "gzipBytes": 45332,
+          "lightBytes": 10156,
+          "coloredFaces": 8685,
+          "coldMs": 76.14,
+          "warmMedianMs": 59.49
+        }
+      ],
+      "quadChangePercent": 0.237,
+      "byteChangePercent": 0.226,
+      "warmTimeChangePercent": 3.281
+    },
+    {
+      "dimension": "nether",
+      "level": 1,
+      "x": 0,
+      "z": 0,
+      "textured": false,
+      "versions": [
+        {
+          "quads": 27127,
+          "bytes": 385459,
+          "gzipBytes": 109256,
+          "lightBytes": 27127,
+          "coloredFaces": 0,
+          "coldMs": 215.24,
+          "warmMedianMs": 189.92
+        },
+        {
+          "quads": 27223,
+          "bytes": 386707,
+          "gzipBytes": 111124,
+          "lightBytes": 27223,
+          "coloredFaces": 23965,
+          "coldMs": 217.27,
+          "warmMedianMs": 190.24
+        }
+      ],
+      "quadChangePercent": 0.354,
+      "byteChangePercent": 0.324,
+      "warmTimeChangePercent": 0.168
+    },
+    {
+      "dimension": "overworld",
+      "level": 0,
+      "x": -3,
+      "z": 3,
+      "mode": "caves",
+      "minY": 32,
+      "maxY": 64,
+      "textured": false,
+      "versions": [
+        {
+          "quads": 10142,
+          "bytes": 140078,
+          "gzipBytes": 39979,
+          "lightBytes": 10142,
+          "coloredFaces": 0,
+          "coldMs": 94.98,
+          "warmMedianMs": 65.84
+        },
+        {
+          "quads": 10161,
+          "bytes": 140325,
+          "gzipBytes": 40171,
+          "lightBytes": 10161,
+          "coloredFaces": 520,
+          "coldMs": 95.41,
+          "warmMedianMs": 65.74
+        }
+      ],
+      "quadChangePercent": 0.187,
+      "byteChangePercent": 0.176,
+      "warmTimeChangePercent": -0.152
+    },
+    {
+      "dimension": "overworld",
+      "level": 0,
+      "x": -3,
+      "z": 3,
+      "mode": "caves",
+      "minY": 32,
+      "maxY": 64,
+      "textured": true,
+      "versions": [
+        {
+          "quads": 10340,
+          "bytes": 184012,
+          "gzipBytes": 44309,
+          "lightBytes": 10340,
+          "coloredFaces": 0,
+          "coldMs": 81.13,
+          "warmMedianMs": 66.77
+        },
+        {
+          "quads": 10359,
+          "bytes": 184335,
+          "gzipBytes": 44512,
+          "lightBytes": 10359,
+          "coloredFaces": 520,
+          "coldMs": 81.96,
+          "warmMedianMs": 66.03
+        }
+      ],
+      "quadChangePercent": 0.184,
+      "byteChangePercent": 0.176,
+      "warmTimeChangePercent": -1.108
+    },
+    {
+      "dimension": "overworld",
+      "level": 2,
+      "x": -1,
+      "z": 0,
+      "textured": false,
+      "versions": [
+        {
+          "quads": 47465,
+          "bytes": 602388,
+          "gzipBytes": 213012,
+          "lightBytes": 0,
+          "coloredFaces": 0,
+          "coldMs": 362.6,
+          "warmMedianMs": 299.44
+        },
+        {
+          "quads": 47465,
+          "bytes": 602388,
+          "gzipBytes": 213012,
+          "lightBytes": 0,
+          "coloredFaces": 0,
+          "coldMs": 365.88,
+          "warmMedianMs": 301.48
+        }
+      ],
+      "quadChangePercent": 0,
+      "byteChangePercent": 0,
+      "warmTimeChangePercent": 0.681
+    }
+  ],
+  "reference": "Source hashes and compiled baseline preserved before modifications; same copied world, no repository operations during comparison",
+  "regionFormatVersion": [
+    4,
+    5
+  ],
+  "desktop": {
+    "viewport": [
+      1280,
+      900
+    ],
+    "devicePixelRatio": 1,
+    "backend": "WebGPU",
+    "fpsBefore": 144,
+    "fpsAfter": 144,
+    "medianFrameMs": 6.9,
+    "p95FrameMs": 7,
+    "limitation": "display capped; no spare GPU capacity or phone performance claim"
+  }
+}

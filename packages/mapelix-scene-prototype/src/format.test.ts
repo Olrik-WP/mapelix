@@ -14,10 +14,40 @@ import {
   regionGridSize,
   unpackQuad,
   REGION_FLAG_BLOCK_LIGHT,
+  REGION_FLAG_BLOCK_LIGHT_COLORS,
   REGION_FORMAT_VERSION,
 } from "./format.js";
 
 describe("scene region format", () => {
+  it("round-trips source families in the same byte plane and rejects color without intensity", () => {
+    const empty = new Uint32Array(0);
+    const region = {
+      level: 0,
+      x: 0,
+      z: 0,
+      minY: 0,
+      maxY: 1,
+      heights: new Int16Array(4096),
+      opaque: new Uint32Array(6),
+      plants: empty,
+      translucent: empty,
+      blockLight: {
+        opaque: Uint8Array.of(0x2b, 0x1a),
+        plants: new Uint8Array(0),
+        translucent: new Uint8Array(0),
+      },
+    };
+    expect(() => encodeSceneRegion(region)).toThrow(/0..15/);
+    const bytes = encodeSceneRegion({ ...region, blockLightColors: true });
+    const decoded = decodeSceneRegion(bytes);
+    expect(decoded.blockLightColors).toBe(true);
+    expect(decoded.blockLight!.opaque).toEqual(region.blockLight.opaque);
+    expect(decoded.blockLight!.opaque.buffer).toBe(bytes.buffer);
+    expect(bytes[7]! & REGION_FLAG_BLOCK_LIGHT_COLORS).toBe(REGION_FLAG_BLOCK_LIGHT_COLORS);
+    const invalid = bytes.slice();
+    invalid[invalid.length - 1] = 0x20;
+    expect(() => decodeSceneRegion(invalid)).toThrow(/block-light/);
+  });
   it.each([false, true])(
     "round-trips a byte per quad with zero-copy lighting, textured=%s",
     (textured) => {
@@ -49,7 +79,7 @@ describe("scene region format", () => {
       const { blockLight: _light, ...unlit } = region;
       const bytes = encodeSceneRegion(region);
       expect(bytes.length - encodeSceneRegion(unlit).length).toBe(4);
-      expect(new DataView(bytes.buffer).getUint16(4, true)).toBe(4);
+      expect(new DataView(bytes.buffer).getUint16(4, true)).toBe(REGION_FORMAT_VERSION);
       expect(bytes[7]! & REGION_FLAG_BLOCK_LIGHT).toBe(REGION_FLAG_BLOCK_LIGHT);
       const decoded = decodeSceneRegion(bytes);
       expect(decoded.blockLight).toEqual(region.blockLight);

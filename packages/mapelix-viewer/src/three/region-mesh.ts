@@ -35,12 +35,13 @@ interface Layer {
 export class RegionMeshPool {
   // Renderer state is cached by mesh/material. Its vertex layout must survive reuse;
   // plain unlit geometry lacks the texture/light buffer that lit geometry requires.
-  private readonly pools = new Map<MaterialPair, [Mesh[], Mesh[]]>();
+  private readonly pools = new Map<MaterialPair, [Mesh[], Mesh[], Mesh[], Mesh[]]>();
   constructor(private readonly capacity = 64) {}
 
   acquire(materials: MaterialPair, geometry: InstancedBufferGeometry): Mesh {
-    const layout = geometry.hasAttribute("texture") ? 1 : 0;
-    const mesh = this.pools.get(materials)?.[layout].pop();
+    const layout =
+      (geometry.hasAttribute("texture") ? 1 : 0) | (geometry.hasAttribute("light") ? 2 : 0);
+    const mesh = this.pools.get(materials)?.[layout]?.pop();
     if (mesh === undefined) return new Mesh(geometry, materials.steady);
     mesh.geometry = geometry;
     mesh.material = materials.steady;
@@ -48,26 +49,30 @@ export class RegionMeshPool {
   }
 
   release(mesh: Mesh, materials: MaterialPair): void {
-    const layout = mesh.geometry.hasAttribute("texture") ? 1 : 0;
+    const layout =
+      (mesh.geometry.hasAttribute("texture") ? 1 : 0) |
+      (mesh.geometry.hasAttribute("light") ? 2 : 0);
     mesh.geometry.dispose();
     // A disposed geometry can still retain its typed array through a cached render object.
-    for (const name of ["quad", "texture"]) {
+    for (const name of ["quad", "texture", "light"]) {
       const attribute = mesh.geometry.getAttribute(name) as InstancedBufferAttribute | undefined;
       if (attribute !== undefined) attribute.array = new Uint32Array(0);
     }
 
     let pool = this.pools.get(materials);
     if (pool === undefined) {
-      pool = [[], []];
+      pool = [[], [], [], []];
       this.pools.set(materials, pool);
     }
-    if (pool[0].length + pool[1].length < this.capacity) pool[layout].push(mesh);
+    if (pool.reduce((count, list) => count + list.length, 0) < this.capacity)
+      pool[layout]!.push(mesh);
     else mesh.dispose();
   }
 
   get retained(): number {
     let count = 0;
-    for (const pool of this.pools.values()) count += pool[0].length + pool[1].length;
+    for (const pool of this.pools.values())
+      count += pool.reduce((sum, list) => sum + list.length, 0);
     return count;
   }
 
@@ -116,6 +121,7 @@ export class RegionMesh {
       renderOrder: RENDER_ORDER.terrain,
       textures: textures?.opaque.subarray(0, lavaStart / 3),
       blockLight: region.blockLight?.opaque.subarray(0, lavaStart / 3),
+      colors: region.blockLightColors,
     });
     this.add(region.opaque.subarray(lavaStart), materials.lava, bounds, {
       castShadow: true,
@@ -127,6 +133,7 @@ export class RegionMesh {
       renderOrder: RENDER_ORDER.plants,
       textures: textures?.plants,
       blockLight: region.blockLight?.plants,
+      colors: region.blockLightColors,
     });
     const { water, glass, waterLight, glassLight } = splitGlass(
       region.translucent,
@@ -136,18 +143,21 @@ export class RegionMesh {
       castShadow: false,
       renderOrder: RENDER_ORDER.water,
       blockLight: waterLight,
+      colors: region.blockLightColors,
     });
     // Glass draws after all water, so the water behind it shows through.
     this.add(glass, materials.glass, bounds, {
       castShadow: false,
       renderOrder: RENDER_ORDER.glass,
       blockLight: glassLight,
+      colors: region.blockLightColors,
     });
     this.byteLength = this.layers.reduce(
       (bytes, { mesh }) =>
         bytes +
         mesh.geometry.getAttribute("quad").array.byteLength +
-        (mesh.geometry.getAttribute("texture")?.array.byteLength ?? 0),
+        (mesh.geometry.getAttribute("texture")?.array.byteLength ?? 0) +
+        (mesh.geometry.getAttribute("light")?.array.byteLength ?? 0),
       0,
     );
   }
@@ -192,6 +202,7 @@ export class RegionMesh {
       readonly renderOrder: number;
       readonly textures?: Uint32Array | undefined;
       readonly blockLight?: Uint8Array | undefined;
+      readonly colors?: boolean | undefined;
     },
   ): void {
     if (quads.length === 0) return;
@@ -203,8 +214,17 @@ export class RegionMesh {
     // The GPU word exists in both modes. Bits 0..26 retain every texture flag and sheet
     // offset; 27..30 carry light. Distant/unlit plain geometry has no auxiliary buffer.
     const lit = options.blockLight?.some((level) => level > 0) === true;
+    const colored =
+      options.colors === true && options.blockLight?.some((level) => level > 15) === true;
     let data = options.textures;
-    if (lit) {
+    if (colored) {
+      // A dedicated word preserves every texture bit. Plain lit geometry replaces
+      // its old auxiliary word; warm-only layers keep their previous layout.
+      geometry.setAttribute(
+        "light",
+        new InstancedBufferAttribute(Uint32Array.from(options.blockLight!), 1),
+      );
+    } else if (lit) {
       data = new Uint32Array(quads.length / 3);
       for (let i = 0; i < data.length; i++)
         data[i] =

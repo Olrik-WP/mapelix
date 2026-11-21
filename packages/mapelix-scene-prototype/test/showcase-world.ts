@@ -13,8 +13,8 @@ import {
 const target = process.argv[2];
 if (target === undefined) throw new Error("Usage: node test/showcase-world.ts <directory>");
 
-const CHUNKS_X = 4;
-const CHUNKS_Z = 6;
+const CHUNKS_X = 7;
+const CHUNKS_Z = 10;
 const FLOOR = 64;
 const blocks = new Map<string, FixtureBlock>();
 const put = (x: number, y: number, z: number, block: FixtureBlock) =>
@@ -269,6 +269,19 @@ for (let base = 0; base < 16; base++) {
   put(x, FLOOR, 89, "minecraft:stone");
   put(x, FLOOR, 90, b("wall_banner", { facing_direction: 3 }));
   for (const z of [86, 90]) banners.push({ x, y: FLOOR, z, base, id: "Banner" });
+}
+
+// Separated source families on neutral floors, with a small wall for contact occlusion.
+const LIGHT_SOURCES = ["lantern", "soul_lantern", "redstone_torch", "sea_lantern", "portal", "lava", "verdant_froglight", "pearlescent_froglight"];
+for (const [i, name] of LIGHT_SOURCES.entries()) {
+  const x = 12 + (i % 4) * 28, z = 116 + Math.floor(i / 4) * 28;
+  for (let dx = -6; dx <= 6; dx++) for (let dz = -6; dz <= 6; dz++)
+    put(x + dx, FLOOR - 1, z + dz, "minecraft:smooth_stone");
+  for (let dx = -3; dx <= 3; dx++) {
+    put(x + dx, FLOOR, z + 4, "minecraft:white_concrete");
+    put(x + dx, FLOOR + 1, z + 4, "minecraft:white_concrete");
+  }
+  put(x, FLOOR, z, b(name, name === "portal" ? { portal_axis: "x" } : {}));
 }
 
 // Gold floor under the samples still to do, so the invisible ones can be found.

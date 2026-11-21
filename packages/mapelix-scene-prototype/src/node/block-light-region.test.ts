@@ -25,6 +25,7 @@ beforeAll(async () => {
         ),
         sectionRecord(dimension, chunkX, 0, 4, (x, y, z) => {
           if (y === 64 && z === 8 && (x === -1 || x === 63)) return "minecraft:lantern";
+          if (y === 64 && z === 8 && x === 24) return "minecraft:soul_lantern";
           // A portal inside an obsidian frame, away from the other sources.
           if (x === 40 && z >= 7 && z <= 10 && y <= 67) {
             if (z === 7 || z === 10 || y === 67) return "minecraft:obsidian";
@@ -143,3 +144,34 @@ it("builds lighter near regions without block light when asked", () => {
     expect(unlit.opaque.length).toBeLessThanOrEqual(lit.opaque.length);
   }
 });
+
+it.each([0, 1, 2])(
+  "preserves colored portal and soul light in dimension %i at both near levels",
+  (dimension) => {
+    for (const level of [0, 1])
+      for (const textured of level === 0 ? [false, true] : [false]) {
+        const request = {
+          level,
+          x: 0,
+          z: 0,
+          ...(textured
+            ? { textures: { fingerprint: "empty", blocks: {}, tiles: {}, terrain: {} } }
+            : {}),
+        };
+        const classic = decodeSceneRegion(builders[dimension]!.build(request));
+        const colored = decodeSceneRegion(
+          builders[dimension]!.build({ ...request, blockLightColors: true }),
+        );
+        expect(colored.blockLightColors).toBe(true);
+        expect(topLight(colored, 39, 63, 8)).toBe((2 << 4) | 10);
+        expect(topLight(colored, 25, 63, 8)).toBe((1 << 4) | 9);
+        for (const x of [0, 25, 35, 39, 41, 45, 62])
+          expect(topLight(colored, x, 63, 8) & 15).toBe(topLight(classic, x, 63, 8));
+        const off = decodeSceneRegion(
+          builders[dimension]!.build({ ...request, blockLightColors: true, blockLight: false }),
+        );
+        expect(off.blockLight).toBeUndefined();
+        expect(off.blockLightColors).toBeUndefined();
+      }
+  },
+);

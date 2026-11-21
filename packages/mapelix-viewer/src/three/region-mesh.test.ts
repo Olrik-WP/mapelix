@@ -169,3 +169,63 @@ it("allocates no auxiliary GPU buffer for unlit and distant geometry", () => {
   expect(mesh.byteLength).toBe(24);
   mesh.dispose();
 });
+
+it.each([false, true])(
+  "uses a separate colored-light word without modifying texture bits, textured=%s",
+  (textured) => {
+    const empty = new Uint32Array(0),
+      word = withTextureOffset(packQuadTexture(1234, 3, true) | QUAD_CUTOUT, 15, 15);
+    const region = decodeSceneRegion(
+      encodeSceneRegion({
+        level: 0,
+        x: 0,
+        z: 0,
+        minY: 0,
+        maxY: 1,
+        heights: new Int16Array(4096),
+        opaque: quad(QuadMaterial.Solid),
+        plants: empty,
+        translucent: empty,
+        blockLightColors: true,
+        blockLight: {
+          opaque: Uint8Array.of(0x2b),
+          plants: new Uint8Array(0),
+          translucent: new Uint8Array(0),
+        },
+        ...(textured
+          ? { textures: { opaque: Uint32Array.of(word), plants: empty, translucent: empty } }
+          : {}),
+      }),
+    );
+    const mesh = new RegionMesh(region, materials),
+      geometry = (mesh.group.children[0] as Mesh).geometry;
+    expect(geometry.getAttribute("light").array[0]).toBe(0x2b);
+    expect(geometry.getAttribute("texture")?.array[0]).toBe(textured ? word : undefined);
+    expect(mesh.byteLength).toBe(textured ? 20 : 16);
+    mesh.dispose();
+  },
+);
+
+it("isolates all four pooled layouts, including colored buffers, under one capacity", () => {
+  const pool = new RegionMeshPool(4),
+    meshes: Mesh[] = [];
+  for (let layout = 0; layout < 4; layout++) {
+    const geometry = pooledGeometry(147, !!(layout & 1));
+    if (layout & 2)
+      geometry.setAttribute("light", new InstancedBufferAttribute(new Uint32Array(147), 1));
+    const mesh = pool.acquire(pair, geometry);
+    expect(meshes).not.toContain(mesh);
+    meshes.push(mesh);
+    pool.release(mesh, pair);
+  }
+  for (let layout = 0; layout < 4; layout++) {
+    const geometry = pooledGeometry(161, !!(layout & 1));
+    if (layout & 2)
+      geometry.setAttribute("light", new InstancedBufferAttribute(new Uint32Array(161), 1));
+    const mesh = pool.acquire(pair, geometry);
+    expect(mesh).toBe(meshes[layout]);
+    pool.release(mesh, pair);
+  }
+  expect(pool.retained).toBe(4);
+  pool.dispose();
+});

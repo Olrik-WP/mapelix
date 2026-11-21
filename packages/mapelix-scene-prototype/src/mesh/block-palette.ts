@@ -1,7 +1,7 @@
 import type { LittleEndianNbtCompoundValue } from "@mapelix/prototype/bedrock";
 
 import { BEDROCK_COLOR_STATES } from "../blocks/bedrock-colors.js";
-import { LIGHT_STATES, blockEmission } from "../blocks/block-light.js";
+import { LIGHT_STATES, blockEmission, blockEmissionColor } from "../blocks/block-light.js";
 import {
   resolveBlockAppearance,
   type BiomeTint,
@@ -157,6 +157,7 @@ export class BlockPalette {
   shape = new Uint8Array(256);
   /** Block emission, independent of the visual material and of the texture stack. */
   emission = new Uint8Array(256);
+  emissionColor = new Uint8Array(256);
   material = new Uint8Array(256);
   boxSize = new Uint8Array(256);
   boxInset = new Uint8Array(256);
@@ -213,6 +214,7 @@ export class BlockPalette {
     const appearance = resolveBlockAppearance(name, states ?? {});
     this.write(id, appearance);
     this.emission[id] = blockEmission(name, states ?? {});
+    this.emissionColor[id] = blockEmissionColor(name);
     if (this.names !== undefined) this.writeTextures(id, name, states ?? {}, appearance);
     this.ids.set(key, id);
     return id;
@@ -384,6 +386,7 @@ export class BlockPalette {
     const capacity = this.shape.length * 2;
     this.shape = grow(this.shape, capacity);
     this.emission = grow(this.emission, capacity);
+    this.emissionColor = grow(this.emissionColor, capacity);
     this.material = grow(this.material, capacity);
     this.boxSize = grow(this.boxSize, capacity);
     this.boxInset = grow(this.boxInset, capacity);

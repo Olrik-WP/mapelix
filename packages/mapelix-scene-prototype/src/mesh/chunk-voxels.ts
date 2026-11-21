@@ -72,6 +72,7 @@ export class ChunkVoxelReader {
     ceilingY = this.chunks.config.maxY,
     window?: VerticalBounds,
     lighting = false,
+    colors = false,
   ): ChunkVoxels | undefined {
     const records = this.chunks.records(chunkX, chunkZ);
     if (records === undefined) return undefined;
@@ -131,6 +132,7 @@ export class ChunkVoxelReader {
       low,
       tints,
       window === undefined ? undefined : (x, y, z) => biomeTints(records.biomes.at(x, y, z)),
+      colors,
     );
     box.filled = sections[0]!.y * 16 + sections[0]!.top + 1 - low;
     for (let size = 2; size <= voxelSize; size *= 2) {
@@ -188,6 +190,7 @@ export class ChunkVoxelReader {
     low: number,
     tints: readonly Uint32Array[],
     tintsAt?: (x: number, y: number, z: number) => Uint32Array,
+    colors = false,
   ): void {
     const { voxel, covered } = this.palette;
     const { kind: kinds, top: tops, side: sides, fill, covered: soils } = box;
@@ -213,7 +216,11 @@ export class ChunkVoxelReader {
           // Box columns run z * 16 + x; Bedrock stores blocks as x * 256 + z * 16 + y.
           const cell = cells[((column & 15) << 8) | ((column >> 4) << 4) | y]!;
           const id = cell & PALETTE_ID_MASK;
-          if (box.emission !== undefined) box.emission[index] = this.palette.emission[id]!;
+          if (box.emission !== undefined) {
+            const emission = this.palette.emission[id]!;
+            box.emission[index] =
+              emission === 0 ? 0 : emission | (colors ? this.palette.emissionColor[id]! << 4 : 0);
+          }
           if (box.lightOpaque !== undefined)
             box.lightOpaque[index] = this.palette.isOpaque(id) ? 1 : 0;
           const tint = tintsAt?.(column & 15, section.y * 16 + y, column >> 4) ?? tints[column]!;

@@ -50,6 +50,8 @@ export function viewerSearch(viewer: MapelixViewer): URLSearchParams {
   if (settings.showFps) params.set("fps", "1");
   const unlit = DIMENSIONS.filter((dimension) => settings.blockLight[dimension] === false);
   if (unlit.length) params.set("noBlockLight", unlit.join(","));
+  const colored = DIMENSIONS.filter((dimension) => settings.blockLightColors?.[dimension] === true);
+  if (colored.length) params.set("blockLightColors", colored.join(","));
   if (settings.textures === "on") params.set("textures", "1");
   if (settings.leaves === "detailed") params.set("leaves", "detailed");
   if (!settings.autoDepth) params.set("autoDepth", "0");
@@ -90,6 +92,11 @@ export function startFromSearch(params: URLSearchParams): SearchStart {
       DIMENSIONS.map((dimension) => [dimension, !unlit.split(",").includes(dimension)]),
     );
   if (params.get("textures") === "1") settings.textures = "on";
+  const colored = params.get("blockLightColors");
+  if (colored !== null)
+    settings.blockLightColors = Object.fromEntries(
+      DIMENSIONS.map((dimension) => [dimension, colored.split(",").includes(dimension)]),
+    );
   if (params.get("leaves") === "detailed") settings.leaves = "detailed";
   if (params.get("autoDepth") === "0") settings.autoDepth = false;
   try {

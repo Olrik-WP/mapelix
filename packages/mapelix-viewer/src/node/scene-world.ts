@@ -153,8 +153,8 @@ export type TextureStats =
   | { readonly error: string };
 
 export interface PrewarmOptions {
-  /** Near-region variants to prepare (default [true]); use [true, false] for both modes. */
-  readonly blockLightModes?: readonly boolean[];
+  /** Near variants to prepare (default [true]); false adds unlit, "colored" adds source colors. */
+  readonly blockLightModes?: readonly (boolean | "colored")[];
   /** At most this many Surface regions, coarse levels and the middle of the world first. */
   readonly maxRegions?: number;
   /** Then every discovery index of the stored area (default true). */
@@ -295,7 +295,7 @@ export function createSceneServer(options: SceneServerOptions) {
     | {
         readonly maxRegions: number;
         readonly signal: AbortSignal;
-        readonly blockLightModes: readonly boolean[];
+        readonly blockLightModes: readonly (boolean | "colored")[];
       }
     | undefined;
   const stopPrewarm = new AbortController();
@@ -551,7 +551,7 @@ export function createSceneServer(options: SceneServerOptions) {
     set: TextureSet,
     maxRegions: number,
     signal: AbortSignal,
-    blockLightModes: readonly boolean[],
+    blockLightModes: readonly (boolean | "colored")[],
   ): Promise<PrewarmProgress> {
     stopTexturePrewarm?.abort();
     const stop = new AbortController();
@@ -678,6 +678,9 @@ export function createSceneServer(options: SceneServerOptions) {
       x: request.x,
       z: request.z,
       ...(request.blockLight === undefined ? {} : { blockLight: request.blockLight }),
+      ...(request.blockLightColors === undefined
+        ? {}
+        : { blockLightColors: request.blockLightColors }),
     };
     if (load.textures !== undefined) {
       const set = textureSet;
