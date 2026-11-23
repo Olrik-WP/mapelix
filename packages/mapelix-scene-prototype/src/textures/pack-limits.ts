@@ -9,9 +9,10 @@ export interface PackLimits {
   /** Uncompressed size of one file that is read. */
   readonly maxFileBytes: number;
   /**
-   * Largest uncompressed-to-compressed size ratio of an archive entry above
-   * `RATIO_FLOOR_BYTES`. Sparse vanilla textures reach about 120 to 1; a zip bomb nears
-   * the deflate limit of about 1000 to 1.
+   * Largest ratio of the uncompressed size of every entry of an archive to the archive's size,
+   * once that sum passes `RATIO_FLOOR_BYTES`. Packs stay far below it (about 3 to 10 to 1),
+   * even with flat textures that compress near the deflate limit of about 1000 to 1 each; a zip
+   * bomb nears that limit as a whole.
    */
   readonly maxCompressionRatio: number;
   /** Pixels of one decoded image. */
@@ -36,7 +37,7 @@ export const DEFAULT_PACK_LIMITS: PackLimits = {
   maxEntries: 65_536,
   maxTotalBytes: 2048 * 1024 * 1024,
   maxFileBytes: 16 * 1024 * 1024,
-  maxCompressionRatio: 400,
+  maxCompressionRatio: 200,
   maxImagePixels: 4 * 1024 * 1024,
   maxImageSide: 8192,
   maxPacks: 32,
@@ -44,7 +45,7 @@ export const DEFAULT_PACK_LIMITS: PackLimits = {
   maxStackBytes: 4096 * 1024 * 1024,
 };
 
-/** Entries smaller than this are too small for their ratio to matter. */
+/** Archives holding less than this, uncompressed, are too small for their ratio to matter. */
 export const RATIO_FLOOR_BYTES = 1024 * 1024;
 
 /** A pack that cannot be used, named with the pack and, when known, the file inside it. */

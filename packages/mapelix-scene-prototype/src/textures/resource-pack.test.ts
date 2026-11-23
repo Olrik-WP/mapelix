@@ -188,7 +188,10 @@ describe("resource pack stack", () => {
       [[...pack, { name: "textures\\x.png", data: "x" }], /unsafe entry name/],
       [[...pack, { name: "a//b.png", data: "x" }], /unsafe entry name/],
       [[...pack, { name: "manifest.json", data: "{}" }], /appears twice/],
-      [[...pack, { name: "sounds/bomb.bin", data: bomb }], /compresses more than 400 to 1/],
+      [
+        [...pack, { name: "sounds/bomb.bin", data: bomb }],
+        /compresses more than 200 to 1 as a whole/,
+      ],
       [[...pack, { name: "x.bin", data: "x", flags: 1 }], /is encrypted/],
       [[...pack, { name: "x.bin", data: "x", declaredSize: 0xffff_ffff }], /ZIP64/],
       [pack, /more than 3 entries/, { maxEntries: 3 }],
@@ -203,6 +206,37 @@ describe("resource pack stack", () => {
         (error: unknown) => error,
       )) as Error,
     ).toBeInstanceOf(ResourcePackError);
+  });
+
+  it("measures the compression ratio on the whole archive, not per entry", async () => {
+    // A flat 1024 × 1152 texture (4.5 MiB) compresses about 1000 to 1 alone.
+    const side = 1024;
+    const flat = new Uint8Array(side * 1152 * 4).fill(128);
+    const tga = makeTga(side, 1152, flat);
+    // Content that does not compress, as most textures of a real pack.
+    let seed = 7;
+    const noise = new Uint8Array(256 * 1024).map(
+      () => (seed = (seed * 16_807) % 2_147_483_647) & 255,
+    );
+    const pack = [
+      ...packFiles(base),
+      { name: "textures/blocks/water_flow_normal.tga", data: tga },
+      { name: "sounds/noise.bin", data: noise },
+    ];
+    const stack = await openResourcePackStack([await file("flat.zip", pack)]);
+    expect(stack.packs).toHaveLength(1);
+    // The same archive under a lower limit, and a zip bomb with the same flat file, are refused.
+    await expect(
+      openResourcePackStack([await file("flat.zip", pack)], { maxCompressionRatio: 10 }),
+    ).rejects.toThrow(/compresses more than 10 to 1 as a whole/);
+    await expect(
+      openResourcePackStack([
+        await file("bomb.zip", [
+          ...packFiles(base),
+          ...Array.from({ length: 8 }, (_, index) => ({ name: `sounds/${index}.tga`, data: tga })),
+        ]),
+      ]),
+    ).rejects.toThrow(/compresses more than 200 to 1 as a whole/);
   });
 
   it("skips a file whose content lies about its size or checksum when it is read", async () => {

@@ -253,11 +253,13 @@ export async function openZip(
       fail("uses ZIP64, which is not supported", path);
     }
     if (entries.has(path)) fail("appears twice", path);
-    if (size > RATIO_FLOOR_BYTES && size > compressedSize * limits.maxCompressionRatio) {
-      fail(`compresses more than ${limits.maxCompressionRatio} to 1`, path);
-    }
     total += size;
     if (total > limits.maxTotalBytes) fail(`holds more than ${limits.maxTotalBytes} bytes`);
+    // The ratio of the whole archive: a flat texture alone may compress about 1000 to 1, the
+    // deflate limit, so a ratio per entry would refuse sound packs and bound nothing more.
+    if (total > RATIO_FLOOR_BYTES && total > access.size * limits.maxCompressionRatio) {
+      fail(`compresses more than ${limits.maxCompressionRatio} to 1 as a whole`);
+    }
     entries.set(path, { method, crc, compressedSize, size, localOffset });
     sizes.set(path, size);
   }

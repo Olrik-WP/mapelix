@@ -104,13 +104,15 @@ is itself a link, refuses the stack. Archives are read entry by entry, never who
 | `maxEntries` (files in one pack)            | 65,536          |
 | `maxTotalBytes` (uncompressed, one pack)    | 2 GiB           |
 | `maxFileBytes` (one file read)              | 16 MiB          |
-| `maxCompressionRatio` (above 1 MiB)         | 400 to 1        |
+| `maxCompressionRatio` (whole archive)       | 200 to 1        |
 | `maxImagePixels` / `maxImageSide`           | 4 Mi / 8192     |
 | `maxPacks`                                  | 32              |
 | `maxStackEntries` / `maxStackBytes`         | 262,144 / 4 GiB |
 
 Zip entries must be stored or deflated, unencrypted, without ZIP64, with names that stay in
-the pack.
+the pack. The compression ratio is measured on the whole archive (every uncompressed size
+against the archive's size, once they pass 1 MiB), not per entry: a flat normal or material
+map can compress near 1000 to 1 on its own, which is not a sign of a zip bomb.
 
 ### Images that break a limit
 
