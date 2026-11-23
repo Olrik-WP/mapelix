@@ -27,6 +27,7 @@ export {
   type Flipbook,
   type ResourcePack,
   type ResourcePackInfo,
+  type FoundTextureSet,
   type ResourcePackStack,
   type SkippedImage,
   type TerrainEntry,
@@ -43,10 +44,14 @@ export {
 export * from "./atlas-format.js";
 export {
   DEFAULT_ATLAS_OPTIONS,
+  DEFAULT_PBR_OPTIONS,
   buildTextureAtlas,
   textureNames,
   textureRevision,
+  type BuiltPbrAtlases,
   type BuiltTextureAtlas,
+  type PbrAtlasOptions,
+  type SkippedTextureSet,
   type TextureNotice,
   type TextureAtlasOptions,
   type TextureIndex,
@@ -59,3 +64,11 @@ export {
   type StackFileEntry,
 } from "./stack-file.js";
 export { bytesAccess, type RandomAccess } from "./pack-files.js";
+export {
+  TEXTURE_SET_FORMATS,
+  TEXTURE_SET_SUFFIX,
+  heightToNormals,
+  parseTextureSet,
+  type TextureSet,
+  type TextureSetLayer,
+} from "./texture-sets.js";

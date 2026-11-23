@@ -33,6 +33,8 @@ export type { MobilePixelRatio } from "./three/render-quality.js";
 export type {
   BlockLightSettings,
   LeafMode,
+  PbrMode,
+  PbrState,
   TextureFade,
   TextureMode,
   TextureState,

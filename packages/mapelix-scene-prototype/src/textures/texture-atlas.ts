@@ -17,6 +17,8 @@ import {
 } from "./atlas-format.js";
 import type { TextureNames } from "./block-textures.js";
 import type { PackImage } from "./pack-image.js";
+import { ResourcePackChangedError, ResourcePackError } from "./pack-limits.js";
+import { heightToNormals, type TextureSetLayer } from "./texture-sets.js";
 import { BANNER_TEXTURE, BANNER_TILE, bannerTileSide, cutBannerTile } from "./banner-tile.js";
 import {
   BED_COLORS,
@@ -41,7 +43,62 @@ export interface TextureAtlasOptions {
   readonly maxTileSize?: number;
   /** GPU bytes the atlas and its mipmaps may take; tiles shrink until it fits (default 32 MiB). */
   readonly budgetBytes?: number;
+  /**
+   * Builds the normal and material atlases of the stack's texture sets too. Ignored when no
+   * pack holds texture sets; it then changes neither the atlas nor its revision.
+   */
+  readonly pbr?: PbrAtlasOptions;
 }
+
+export interface PbrAtlasOptions {
+  /** Tile side of both atlases, 16, 32 or 64 (default 32), apart from the color tiles. */
+  readonly tileSize?: number;
+  /** GPU bytes both atlases may take with their mipmaps; tiles shrink until they fit (48 MiB). */
+  readonly budgetBytes?: number;
+}
+
+export const DEFAULT_PBR_OPTIONS = {
+  tileSize: 32,
+  budgetBytes: 48 * 1024 * 1024,
+} as const;
+
+/** A texture set the PBR atlases could not use; its tiles keep flat defaults. */
+export interface SkippedTextureSet {
+  readonly pack: ResourcePackInfo;
+  readonly file: string;
+  readonly reason: string;
+}
+
+/**
+ * The normal and material atlases: the same cells and tiles as the color atlas, at their own
+ * tile size. Normals are tangent space with red toward the texture's right, green toward its
+ * bottom and blue out of the face; materials are metalness (red), emissive (green) and
+ * roughness (blue). Tiles without a texture set hold a flat normal and a rough, dull material.
+ */
+export interface BuiltPbrAtlases {
+  readonly tileSize: number;
+  /** The tile size asked for; larger than `tileSize` when the budget made the tiles smaller. */
+  readonly requestedTileSize: number;
+  readonly normal: TextureAtlas;
+  readonly material: TextureAtlas;
+  readonly normalBytes: Uint8Array;
+  readonly materialBytes: Uint8Array;
+  /** GPU bytes of both atlases with their mipmaps. */
+  readonly gpuBytes: number;
+  /** Texture sets used. */
+  readonly sets: number;
+  readonly skipped: readonly SkippedTextureSet[];
+}
+
+/** Flat normal and default material: no metal, no glow, fully rough. */
+const FLAT_NORMAL = [128, 128, 255, 255] as const;
+const DEFAULT_MATERIAL = [0, 0, 255, 255] as const;
+
+/**
+ * Packs draw normal maps with green toward the bottom of the texture (the DirectX convention).
+ * Set to false for green toward the top.
+ */
+const NORMAL_GREEN_DOWN = true;
 
 /**
  * What a region builder needs to texture blocks: the merged block and terrain entries of the
@@ -74,6 +131,8 @@ export interface BuiltTextureAtlas {
   readonly notices: readonly TextureNotice[];
   /** Images the packs hold but the atlas could not use, replaced by the next pack's if any. */
   readonly skipped: readonly SkippedImage[];
+  /** The PBR atlases, when asked for and the stack holds texture sets. */
+  readonly pbr?: BuiltPbrAtlases;
 }
 
 export const DEFAULT_ATLAS_OPTIONS = {
@@ -102,7 +161,19 @@ interface Source {
   readonly banner?: true;
 }
 
-function atlasOptions(options: TextureAtlasOptions): Required<TextureAtlasOptions> {
+function pbrOptions(options: PbrAtlasOptions): Required<PbrAtlasOptions> {
+  const tileSize = options.tileSize ?? DEFAULT_PBR_OPTIONS.tileSize;
+  const budgetBytes = options.budgetBytes ?? DEFAULT_PBR_OPTIONS.budgetBytes;
+  if (![16, 32, 64].includes(tileSize)) throw new RangeError("pbr.tileSize must be 16, 32 or 64");
+  if (!Number.isSafeInteger(budgetBytes) || budgetBytes < 1) {
+    throw new RangeError("pbr.budgetBytes must be a positive integer");
+  }
+  return { tileSize, budgetBytes };
+}
+
+function atlasOptions(
+  options: TextureAtlasOptions,
+): Required<Omit<TextureAtlasOptions, "pbr">> & { readonly pbr?: Required<PbrAtlasOptions> } {
   const maxTileSize = options.maxTileSize ?? DEFAULT_ATLAS_OPTIONS.maxTileSize;
   const budgetBytes = options.budgetBytes ?? DEFAULT_ATLAS_OPTIONS.budgetBytes;
   if (
@@ -115,24 +186,32 @@ function atlasOptions(options: TextureAtlasOptions): Required<TextureAtlasOption
   if (!Number.isSafeInteger(budgetBytes) || budgetBytes < 1) {
     throw new RangeError("budgetBytes must be a positive integer");
   }
-  return { maxTileSize, budgetBytes };
+  return {
+    maxTileSize,
+    budgetBytes,
+    ...(options.pbr === undefined ? {} : { pbr: pbrOptions(options.pbr) }),
+  };
 }
 
 /**
  * The texture revision: names the atlas and every region textured with it. It follows from the
- * stack fingerprint and the options alone, so it is known before the atlas is built.
+ * stack fingerprint and the options alone, so it is known before the atlas is built. `pbr` counts
+ * only for a stack with texture sets (`hasTextureSets`): pass it only then.
  */
 export function textureRevision(
   stackFingerprint: string,
   options: TextureAtlasOptions = {},
 ): string {
-  const { maxTileSize, budgetBytes } = atlasOptions(options);
-  return createHash("sha256")
-    .update(
-      ["mapelix-atlas", ATLAS_FORMAT_VERSION, stackFingerprint, maxTileSize, budgetBytes].join("|"),
-    )
-    .digest("hex")
-    .slice(0, 20);
+  const { maxTileSize, budgetBytes, pbr } = atlasOptions(options);
+  const parts: (string | number)[] = [
+    "mapelix-atlas",
+    ATLAS_FORMAT_VERSION,
+    stackFingerprint,
+    maxTileSize,
+    budgetBytes,
+  ];
+  if (pbr !== undefined) parts.push("pbr", pbr.tileSize, pbr.budgetBytes);
+  return createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 20);
 }
 
 /**
@@ -143,7 +222,8 @@ export async function buildTextureAtlas(
   stack: ResourcePackStack,
   options: TextureAtlasOptions = {},
 ): Promise<BuiltTextureAtlas> {
-  const { maxTileSize, budgetBytes } = atlasOptions(options);
+  const { maxTileSize, budgetBytes, pbr: askedPbr } = atlasOptions(options);
+  const pbr = stack.hasTextureSets ? askedPbr : undefined;
 
   // The merged entries: each block and terrain name from the first pack defining it.
   const blocks: Record<string, BlockTextureNames> = {};
@@ -255,6 +335,7 @@ export async function buildTextureAtlas(
   const { width, height } = atlasLevelSize({ tileSize, columns, rows }, 0);
   const base = new Uint8Array(width * height * 4);
   const tiles: AtlasTileInfo[] = [];
+  const placed: Placed[] = [];
   const tileOf: Record<string, number> = {};
   const used = new Map<ResourcePack, string[]>();
   const sheetImages = new Map<string, PackImage | undefined>();
@@ -277,6 +358,7 @@ export async function buildTextureAtlas(
     const files = used.get(found.pack) ?? [];
     if (!files.includes(found.file)) used.set(found.pack, [...files, found.file]);
     tileOf[source.path] = tiles.length;
+    if (source.bed === undefined && !source.banner) placed.push({ source, tile: tiles.length });
     // An image that failed to decode was replaced by the next pack's, which may hold fewer
     // frames than the layout counted: its frames repeat.
     const side = Math.min(image.width, image.height);
@@ -312,7 +394,13 @@ export async function buildTextureAtlas(
     );
   }
   const atlas: TextureAtlas = { tileSize, columns, rows, tiles, levels };
-  const fingerprint = textureRevision(stack.fingerprint, { maxTileSize, budgetBytes });
+  const fingerprint = textureRevision(stack.fingerprint, {
+    maxTileSize,
+    budgetBytes,
+    ...(pbr === undefined ? {} : { pbr }),
+  });
+  const pbrAtlases =
+    pbr === undefined ? undefined : await buildPbrAtlases(stack, placed, atlas, pbr);
   return {
     fingerprint,
     atlas,
@@ -329,7 +417,202 @@ export async function buildTextureAtlas(
       .filter((pack) => used.has(pack))
       .map((pack) => ({ pack: pack.info, files: used.get(pack)!.sort() })),
     skipped: [...stack.skippedImages()],
+    ...(pbrAtlases === undefined ? {} : { pbr: pbrAtlases }),
   };
+}
+
+/** Where a color source landed: its first tile, its frames following. */
+interface Placed {
+  readonly source: Source;
+  readonly tile: number;
+}
+
+/**
+ * The normal and material atlases of the placed tiles, from the texture set of each color
+ * image. A set that cannot be read is skipped as a whole and reported; its tiles stay flat.
+ */
+async function buildPbrAtlases(
+  stack: ResourcePackStack,
+  placed: readonly Placed[],
+  color: TextureAtlas,
+  options: Required<PbrAtlasOptions>,
+): Promise<BuiltPbrAtlases> {
+  const { columns, rows } = color;
+  const fits = (tile: number): boolean =>
+    2 * atlasBytes({ tileSize: tile, columns, rows }) <= options.budgetBytes &&
+    Math.max(columns, rows) * atlasCellSize(tile) <= MAX_ATLAS_SIDE;
+  let tileSize = options.tileSize;
+  while (tileSize > MIN_ATLAS_TILE && !fits(tileSize)) tileSize /= 2;
+  const cell = atlasCellSize(tileSize);
+  const gutter = atlasGutter(tileSize);
+  const { width, height } = atlasLevelSize({ tileSize, columns, rows }, 0);
+  const fill = (value: readonly number[]): Uint8Array => {
+    const pixels = new Uint8Array(width * height * 4);
+    for (let at = 0; at < pixels.length; at += 4) pixels.set(value, at);
+    return pixels;
+  };
+  const normal = fill(FLAT_NORMAL);
+  const material = fill(DEFAULT_MATERIAL);
+  const skipped: SkippedTextureSet[] = [];
+  let sets = 0;
+
+  for (const { source, tile } of placed) {
+    const found = await stack.textureSet(source.path);
+    if (found === undefined) continue;
+    if ("reason" in found) {
+      skipped.push({ pack: found.pack.info, file: found.file, reason: found.reason });
+      continue;
+    }
+    const layer = async (
+      value: TextureSetLayer | undefined,
+    ): Promise<PackImage | readonly number[] | undefined> =>
+      value === undefined
+        ? undefined
+        : "value" in value
+          ? value.value
+          : stack.readPackImage(found.pack, value.image);
+    let normalLayer: PackImage | undefined;
+    let materialLayer: PackImage | readonly number[] | undefined;
+    try {
+      const normalImage = await layer(found.set.normal);
+      if (normalImage !== undefined && !Array.isArray(normalImage))
+        normalLayer = normalImage as PackImage;
+      else {
+        const heights = await layer(found.set.heightmap);
+        if (heights !== undefined && !Array.isArray(heights)) {
+          const image = heights as PackImage;
+          normalLayer = { ...image, rgba: heightToNormals(image) };
+        }
+      }
+      materialLayer = await layer(found.set.mer);
+    } catch (error) {
+      if (error instanceof ResourcePackChangedError) throw error;
+      skipped.push({
+        pack: found.pack.info,
+        file: found.file,
+        reason: error instanceof ResourcePackError ? error.reason : (error as Error).message,
+      });
+      continue;
+    }
+    sets += 1;
+    for (const [order, wanted] of source.frames.entries()) {
+      const x0 = ((tile + order) % columns) * cell + gutter;
+      const y0 = Math.floor((tile + order) / columns) * cell + gutter;
+      if (normalLayer !== undefined) {
+        drawFrame(normalLayer, wanted, tileSize, normal, width, x0, y0);
+        if (!NORMAL_GREEN_DOWN) flipGreen(normal, width, x0, y0, tileSize);
+        normalize(normal, width, x0, y0, tileSize, tileSize);
+        wrapGutter(normal, width, x0, y0, tileSize, gutter);
+      }
+      if (materialLayer !== undefined) {
+        if (Array.isArray(materialLayer))
+          fillTile(material, width, x0, y0, tileSize, materialLayer);
+        else drawFrame(materialLayer as PackImage, wanted, tileSize, material, width, x0, y0);
+        // The subsurface channel is not used: the alpha stays opaque.
+        for (let y = 0; y < tileSize; y++)
+          for (let x = 0; x < tileSize; x++) material[((y0 + y) * width + x0 + x) * 4 + 3] = 255;
+        wrapGutter(material, width, x0, y0, tileSize, gutter);
+      }
+    }
+  }
+
+  const plain = (): boolean => false;
+  const normalLevels: Uint8Array[] = [normal];
+  const materialLevels: Uint8Array[] = [material];
+  for (let level = 1; level < atlasLevelCount(tileSize); level++) {
+    const size = atlasLevelSize({ tileSize, columns, rows }, level - 1);
+    const next = halve(normalLevels[level - 1]!, size, cell >> (level - 1), plain);
+    // Averaged normals are shorter than one: each level is renormalized.
+    const { width: levelWidth, height: levelHeight } = atlasLevelSize(
+      { tileSize, columns, rows },
+      level,
+    );
+    normalize(next, levelWidth, 0, 0, levelWidth, levelHeight);
+    normalLevels.push(next);
+    materialLevels.push(halve(materialLevels[level - 1]!, size, cell >> (level - 1), plain));
+  }
+  const normalAtlas: TextureAtlas = {
+    tileSize,
+    columns,
+    rows,
+    tiles: color.tiles,
+    levels: normalLevels,
+  };
+  const materialAtlas: TextureAtlas = { ...normalAtlas, levels: materialLevels };
+  return {
+    tileSize,
+    requestedTileSize: options.tileSize,
+    normal: normalAtlas,
+    material: materialAtlas,
+    normalBytes: encodeTextureAtlas(normalAtlas),
+    materialBytes: encodeTextureAtlas(materialAtlas),
+    gpuBytes: 2 * atlasBytes(normalAtlas),
+    sets,
+    skipped,
+  };
+}
+
+/** One square frame of a layer image, scaled to the tile; frames past the image's repeat. */
+function drawFrame(
+  image: PackImage,
+  wanted: number,
+  tileSize: number,
+  out: Uint8Array,
+  outWidth: number,
+  x0: number,
+  y0: number,
+): void {
+  const side = Math.min(image.width, image.height);
+  const available = Math.max(1, Math.floor(image.height / side));
+  // Layers have no transparency: plain averages, alpha kept opaque.
+  resample(image, side, wanted % available, tileSize, out, outWidth, x0, y0, false);
+  for (let y = 0; y < tileSize; y++)
+    for (let x = 0; x < tileSize; x++) out[((y0 + y) * outWidth + x0 + x) * 4 + 3] = 255;
+}
+
+function fillTile(
+  out: Uint8Array,
+  width: number,
+  x0: number,
+  y0: number,
+  tileSize: number,
+  value: readonly number[],
+): void {
+  for (let y = 0; y < tileSize; y++)
+    for (let x = 0; x < tileSize; x++) out.set(value.slice(0, 4), ((y0 + y) * width + x0 + x) * 4);
+}
+
+function flipGreen(out: Uint8Array, width: number, x0: number, y0: number, tileSize: number): void {
+  for (let y = 0; y < tileSize; y++)
+    for (let x = 0; x < tileSize; x++) {
+      const at = ((y0 + y) * width + x0 + x) * 4 + 1;
+      out[at] = 255 - out[at]!;
+    }
+}
+
+/** Rescales the normals of a rectangle to unit length; a zero normal becomes flat. */
+function normalize(
+  out: Uint8Array,
+  width: number,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+): void {
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const at = ((y0 + y) * width + x0 + x) * 4;
+      let nx = out[at]! / 127.5 - 1;
+      let ny = out[at + 1]! / 127.5 - 1;
+      // Normals never point into the face.
+      let nz = Math.max(0, out[at + 2]! / 127.5 - 1);
+      const length = Math.hypot(nx, ny, nz);
+      if (length < 1e-3) [nx, ny, nz] = [0, 0, 1];
+      else [nx, ny, nz] = [nx / length, ny / length, nz / length];
+      out[at] = Math.round((nx + 1) * 127.5);
+      out[at + 1] = Math.round((ny + 1) * 127.5);
+      out[at + 2] = Math.round((nz + 1) * 127.5);
+    }
 }
 
 /** Fills the gutter around the tile at `(x0, y0)` with the tile repeated. */

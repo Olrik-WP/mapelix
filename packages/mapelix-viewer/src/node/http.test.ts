@@ -131,6 +131,36 @@ describe("scene handler", () => {
     ]);
   });
 
+  it("serves the PBR atlases beside the color atlas, and 404 for a stack without them", async () => {
+    const server = fakeServer();
+    const encoded = (byte: number) => ({
+      bytes: new Uint8Array([byte]),
+      gzip: new Uint8Array([byte + 1]),
+      brotli: new Uint8Array([byte + 2]),
+    });
+    server.loadTextureAtlas.mockImplementation(async (revision: string) =>
+      revision === "a".repeat(20)
+        ? {
+            ...encoded(1),
+            notices: [],
+            pbr: { normal: encoded(10), mer: encoded(20) },
+          }
+        : revision === "d".repeat(20)
+          ? { ...encoded(1), notices: [] }
+          : undefined,
+    );
+    const handle = createSceneHandler(server as unknown as SceneServer, "/world");
+    const path = `/world/textures/${"a".repeat(20)}`;
+    const normal = await handle(get(`${path}/normal.bin`));
+    expect(normal?.headers.get("cache-control")).toContain("immutable");
+    expect(new Uint8Array(await normal!.arrayBuffer())).toEqual(new Uint8Array([10]));
+    const mer = await handle(get(`${path}/mer.bin`, { headers: { "accept-encoding": "br" } }));
+    expect(mer?.headers.get("content-encoding")).toBe("br");
+    expect(new Uint8Array(await mer!.arrayBuffer())).toEqual(new Uint8Array([22]));
+    const none = await handle(get(`/world/textures/${"d".repeat(20)}/normal.bin`));
+    expect(none?.status).toBe(404);
+  });
+
   it("serves textured level 0 regions and cave slices by texture revision, Surface ones never built when cache-only", async () => {
     const server = fakeServer();
     const handle = createSceneHandler(server as unknown as SceneServer);

@@ -74,6 +74,17 @@ it("round-trips LOW/HD without independent geometry flags or changes to sky and 
   expect(
     startFromSearch(new URLSearchParams("profile=other")).settings.renderProfile,
   ).toBeUndefined();
+  // PBR rides along with or without a profile.
+  for (const profile of [undefined, "hd"] as const) {
+    const viewer = {
+      settings: { ...DEFAULT_WORLD_SETTINGS, renderProfile: profile, pbr: "on" as const },
+      view: { dimension: "overworld", x: 0, z: 0, pixelsPerBlock: 12, projection: "isometric" },
+    } as unknown as MapelixViewer;
+    const search = viewerSearch(viewer);
+    expect(search.get("pbr")).toBe("1");
+    expect(startFromSearch(search).settings.pbr).toBe("on");
+  }
+  expect(startFromSearch(new URLSearchParams("pbr=2")).settings.pbr).toBeUndefined();
   expect(
     startFromSearch(new URLSearchParams("profile=low&textures=1&blockLightColors=nether")).settings,
   ).toMatchObject(renderProfileSettings("low"));

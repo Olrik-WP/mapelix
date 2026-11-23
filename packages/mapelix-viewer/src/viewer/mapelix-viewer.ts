@@ -34,6 +34,8 @@ import { mobilePixelRatio, type MobilePixelRatio } from "../three/render-quality
 import type {
   BlockLightSettings,
   LeafMode,
+  PbrMode,
+  PbrState,
   TextureMode,
   TextureState,
   WorldInfo,
@@ -123,6 +125,11 @@ export interface WorldSettings {
   readonly textures: TextureMode;
   /** Textured leaves and other cut-out blocks: fast (default) or detailed. */
   readonly leaves: LeafMode;
+  /**
+   * Normal maps and materials of packs with texture sets on textured terrain (default off).
+   * Optional for hosts that build settings themselves.
+   */
+  readonly pbr?: PbrMode;
   /** Cave slices follow the camera depth. */
   readonly autoDepth: boolean;
   readonly discoveries: DiscoveryFilters;
@@ -148,6 +155,7 @@ export const DEFAULT_WORLD_SETTINGS: WorldSettings = {
   weather: "clear",
   textures: "off",
   leaves: "fast",
+  pbr: "off",
   autoDepth: true,
   discoveries: DEFAULT_DISCOVERY_FILTERS,
   selection: undefined,
@@ -180,6 +188,17 @@ export interface WorldStatus {
    * `on`, or `failed`, in which case the world keeps its block colors.
    */
   readonly textures: TextureState;
+  /**
+   * PBR: `off`, `unavailable` when the packs hold no texture set, `loading`, `on`, or `failed`
+   * (textures stay, without PBR). `tileSize` is smaller than `requestedTileSize` when the
+   * budget or the largest atlas side reduced it.
+   */
+  readonly pbr?: {
+    readonly state: PbrState;
+    readonly tileSize?: number;
+    readonly requestedTileSize?: number;
+    readonly gpuBytes: number;
+  };
   readonly navigation: DepthNavigation | undefined;
   readonly discoveries: DiscoveryStats | undefined;
   readonly focusedDiscovery: DiscoveryGroup | undefined;
@@ -452,6 +471,7 @@ export class MapelixViewer {
           : this.info !== undefined && this.info.textures === undefined
             ? "unavailable"
             : "loading"),
+      ...pbrStatus((snapshot ?? this.worldViewer?.snapshot())?.textures.pbr),
       navigation: snapshot?.navigation,
       discoveries: snapshot?.discoveries,
       focusedDiscovery: world === undefined ? undefined : this.focused,
@@ -653,6 +673,16 @@ export class MapelixViewer {
       throw new RangeError(`Unknown texture mode ${String(mode)}`);
     this.updateSettings({ textures: mode, renderProfile: undefined });
     this.worldViewer?.setTextures(mode);
+  }
+
+  /**
+   * Bends textured terrain with the packs' normal maps and gives it their metalness, roughness
+   * and emissive texels; the status tells whether the packs have them.
+   */
+  setPbr(mode: PbrMode): void {
+    if (mode !== "off" && mode !== "on") throw new RangeError(`Unknown PBR mode ${String(mode)}`);
+    this.updateSettings({ pbr: mode });
+    this.worldViewer?.setPbr(mode);
   }
 
   /** Textured leaves fast, filled with a dark shade, or detailed, cut out with inner faces. */
@@ -1181,6 +1211,7 @@ export class MapelixViewer {
           blockLightColors: this.settingsNow.blockLightColors ?? {},
           blockLightSmooth: this.settingsNow.blockLightSmooth ?? {},
           leaves: this.settingsNow.leaves,
+          pbr: this.settingsNow.pbr ?? "off",
           textureBase: `${source.base}/textures`,
           onTextureState: () => this.publish(),
           onStaleTextures: () => this.checkTextures(),
@@ -1407,3 +1438,11 @@ export class MapelixViewer {
 }
 
 export type { Projection, SwitchThresholds, ViewMode, ViewState } from "./view-state.js";
+
+function pbrStatus(
+  pbr: ReturnType<WorldViewer["snapshot"]>["textures"]["pbr"] | undefined,
+): Pick<WorldStatus, "pbr"> {
+  if (pbr === undefined) return {};
+  const { mode: _mode, ...rest } = pbr;
+  return { pbr: rest };
+}

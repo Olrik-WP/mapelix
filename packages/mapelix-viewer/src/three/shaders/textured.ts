@@ -13,7 +13,8 @@ import {
   max,
   mix,
   modelScale,
-  normalWorld,
+  normalWorldGeometry,
+  normalize,
   positionWorld,
   select,
   sin,
@@ -30,7 +31,7 @@ import {
 } from "three/tsl";
 import { Vector2, type Node } from "three/webgpu";
 
-import type { BlockAtlas } from "../block-atlas";
+import type { BlockAtlas, PbrAtlas, PbrLayer } from "../block-atlas";
 import { quadColor, quadPackedData, quadPosition, quadSprite, quadUV } from "./quad";
 
 /**
@@ -93,15 +94,21 @@ const LEAF_SHADE = 0.5;
 
 export const DEFAULT_TEXTURE_FADE: TextureFade = { none: 4, full: 8 };
 
+/** What sampling needs of the color atlas or a PBR layer. */
+type AtlasLayer = Pick<PbrLayer, "image" | "tileSize" | "gutter" | "cellSize" | "width" | "height">;
+
 export class TextureLook {
   readonly atlas: BlockAtlas;
+  /** The normal and material atlases, when PBR is on and the stack has texture sets. */
+  readonly pbr: PbrAtlas | undefined;
   /** `none` and `full` of the fade, in CSS pixels per block. */
   readonly fade = uniform(new Vector2(DEFAULT_TEXTURE_FADE.none, DEFAULT_TEXTURE_FADE.full));
   /** Height of the view in CSS pixels. */
   readonly viewHeight = uniform(1);
 
-  constructor(atlas: BlockAtlas) {
+  constructor(atlas: BlockAtlas, pbr?: PbrAtlas) {
     this.atlas = atlas;
+    this.pbr = pbr;
   }
 
   setFade(fade: TextureFade): void {
@@ -146,16 +153,20 @@ export class TextureLook {
   }
 
   private sample(coords: Node<"vec2">): Node<"vec4"> {
-    const { atlas } = this;
+    return this.sampleLayer(this.atlas, coords);
+  }
+
+  /** Samples the quad's tile in the color atlas or a PBR layer, which share cells and tiles. */
+  private sampleLayer(layer: AtlasLayer, coords: Node<"vec2">): Node<"vec4"> {
     const info = this.tileInfo();
     const frames = max(info.x.add(info.y.mul(256)), 1);
     const ticks = max(info.z, 1);
     const frame = time.mul(20).div(ticks).floor().mod(frames);
     const cell = this.cellOf(textureTile.add(frame));
-    const size = vec2(atlas.width, atlas.height);
-    const texel = cell.mul(atlas.cellSize).add(atlas.gutter).add(fract(coords).mul(atlas.tileSize));
-    const scale = vec2(atlas.tileSize, atlas.tileSize).div(size);
-    return texture(atlas.image, texel.div(size)).grad(
+    const size = vec2(layer.width, layer.height);
+    const texel = cell.mul(layer.cellSize).add(layer.gutter).add(fract(coords).mul(layer.tileSize));
+    const scale = vec2(layer.tileSize, layer.tileSize).div(size);
+    return texture(layer.image, texel.div(size)).grad(
       dFdx(coords).mul(scale),
       dFdy(coords).mul(scale),
     );
@@ -170,8 +181,15 @@ export class TextureLook {
    * texture's top up and its left on the left seen from outside, tops with north up.
    */
   private faceTexel(): Node<"vec4"> {
+    return this.sample(this.faceCoords());
+  }
+
+  /** The face's texture coordinates in blocks, turned and moved as `faceTexel` reads them. */
+  private faceCoords(): Node<"vec2"> {
     const p = positionWorld.div(modelScale.x);
-    const n = normalWorld;
+    // The face's own normal: once a material has a normal map, `normalWorld` is the bent one
+    // everywhere but in the normal itself, and would pick faces and coordinates per texel.
+    const n = normalWorldGeometry;
     const coords = select(
       n.y.greaterThan(0.5),
       vec2(p.x, p.z),
@@ -195,7 +213,78 @@ export class TextureLook {
     const s = sin(angle).round();
     const turned = vec2(coords.x.mul(c).add(coords.y.mul(s)), coords.y.mul(c).sub(coords.x.mul(s)));
     // Faces drawn from a sheet of parts move onto their rectangle, in sixteenths of a block.
-    return this.sample(turned.add(vec2(offsetAcross, offsetDown).div(16)));
+    return turned.add(vec2(offsetAcross, offsetDown).div(16));
+  }
+
+  /**
+   * The world directions in which the face's texture coordinates grow: across (`tangent`) and
+   * down the texture (`bitangent`). Block faces are aligned with the axes, so both follow from
+   * the face normal and the quarter turns, as `faceCoords` builds the coordinates: no tangent
+   * attribute and no varying beyond those terrain already uses.
+   */
+  private faceBasis(): { tangent: Node<"vec3">; bitangent: Node<"vec3"> } {
+    const n = normalWorldGeometry;
+    const axis = (
+      top: [number, number, number],
+      bottom: [number, number, number],
+      east: [number, number, number],
+      west: [number, number, number],
+      south: [number, number, number],
+      north: [number, number, number],
+    ): Node<"vec3"> =>
+      select(
+        n.y.greaterThan(0.5),
+        vec3(...top),
+        select(
+          n.y.lessThan(-0.5),
+          vec3(...bottom),
+          select(
+            n.x.greaterThan(0.5),
+            vec3(...east),
+            select(
+              n.x.lessThan(-0.5),
+              vec3(...west),
+              select(n.z.greaterThan(0.5), vec3(...south), vec3(...north)),
+            ),
+          ),
+        ),
+      );
+    const across = axis([1, 0, 0], [1, 0, 0], [0, 0, -1], [0, 0, 1], [1, 0, 0], [-1, 0, 0]);
+    const down = axis([0, 0, 1], [0, 0, -1], [0, -1, 0], [0, -1, 0], [0, -1, 0], [0, -1, 0]);
+    const angle = textureTurn.mul(Math.PI / 2);
+    const c = cos(angle).round();
+    const s = sin(angle).round();
+    return {
+      tangent: across.mul(c).add(down.mul(s)),
+      bitangent: down.mul(c).sub(across.mul(s)),
+    };
+  }
+
+  /**
+   * The face normal bent by the normal atlas, in world space, blended in with the texture.
+   * Normals are stored with red across the texture, green down it and blue out of the face.
+   */
+  pbrNormal(pbr: PbrAtlas): Node<"vec3"> {
+    const stored = this.sampleLayer(pbr.normal, this.pbrCoords()).xyz.mul(2).sub(1);
+    const { tangent, bitangent } = this.faceBasis();
+    const bent = normalize(
+      tangent.mul(stored.x).add(bitangent.mul(stored.y)).add(normalWorldGeometry.mul(stored.z)),
+    );
+    return normalize(mix(normalWorldGeometry, bent, this.amount()));
+  }
+
+  /** Metalness, emissive and roughness at this pixel, flat (0, 0, 1) where no texture shows. */
+  pbrMaterial(pbr: PbrAtlas): Node<"vec3"> {
+    const stored = this.sampleLayer(pbr.material, this.pbrCoords()).xyz;
+    return mix(vec3(0, 0, 1), stored, this.amount());
+  }
+
+  private pbrCoordsNode: Node<"vec2"> | undefined;
+
+  /** One coordinate node for both PBR layers, so the shader computes it once. */
+  private pbrCoords(): Node<"vec2"> {
+    this.pbrCoordsNode ??= this.faceCoords();
+    return this.pbrCoordsNode;
   }
 
   /**

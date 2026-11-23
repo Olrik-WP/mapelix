@@ -9,6 +9,7 @@ import {
   DataTexture,
   LinearMipmapLinearFilter,
   NearestFilter,
+  NoColorSpace,
   RGBAFormat,
   SRGBColorSpace,
   UnsignedByteType,
@@ -103,6 +104,100 @@ export class BlockAtlas {
   dispose(): void {
     this.image.dispose();
     this.animation.dispose();
+  }
+}
+
+/**
+ * One PBR layer on the GPU, normals or materials: the same cells and tiles as the color atlas at
+ * its own tile size, linear values, with its own mipmaps.
+ */
+export interface PbrLayer {
+  readonly image: DataTexture;
+  readonly tileSize: number;
+  readonly gutter: number;
+  readonly cellSize: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** The normal and material atlases of a stack with texture sets. */
+export class PbrAtlas {
+  readonly normal: PbrLayer;
+  readonly material: PbrLayer;
+  readonly tileSize: number;
+  readonly gpuBytes: number;
+
+  constructor(normal: TextureAtlas, material: TextureAtlas, color: BlockAtlas) {
+    if (
+      normal.columns !== color.columns ||
+      normal.rows !== color.rows ||
+      material.columns !== color.columns ||
+      material.rows !== color.rows ||
+      material.tileSize !== normal.tileSize
+    )
+      throw new Error("PBR atlases do not match the color atlas");
+    this.normal = pbrLayer(normal);
+    this.material = pbrLayer(material);
+    this.tileSize = normal.tileSize;
+    let bytes = 0;
+    for (const level of [...normal.levels, ...material.levels]) bytes += level.byteLength;
+    this.gpuBytes = bytes;
+  }
+
+  /** Fetches `normal.bin` and `mer.bin` beside the color atlas, waiting as `BlockAtlas.load`. */
+  static async load(
+    base: string,
+    color: BlockAtlas,
+    signal?: AbortSignal,
+    onMissing?: () => void,
+  ): Promise<PbrAtlas> {
+    const [normal, material] = await Promise.all(
+      ["normal.bin", "mer.bin"].map((file) => fetchAtlas(`${base}/${file}`, signal, onMissing)),
+    );
+    return new PbrAtlas(normal!, material!, color);
+  }
+
+  dispose(): void {
+    this.normal.image.dispose();
+    this.material.image.dispose();
+  }
+}
+
+function pbrLayer(atlas: TextureAtlas): PbrLayer {
+  const top = atlasLevelSize(atlas, 0);
+  const image = new DataTexture(atlas.levels[0], top.width, top.height);
+  image.mipmaps = atlas.levels.map((data, level) => ({ data, ...atlasLevelSize(atlas, level) }));
+  image.format = RGBAFormat;
+  image.type = UnsignedByteType;
+  // Normals and material values are data, not colors.
+  image.colorSpace = NoColorSpace;
+  image.magFilter = NearestFilter;
+  image.minFilter = LinearMipmapLinearFilter;
+  image.generateMipmaps = false;
+  image.flipY = false;
+  image.needsUpdate = true;
+  return {
+    image,
+    tileSize: atlas.tileSize,
+    gutter: atlasGutter(atlas.tileSize),
+    cellSize: atlasCellSize(atlas.tileSize),
+    width: top.width,
+    height: top.height,
+  };
+}
+
+async function fetchAtlas(
+  url: string,
+  signal: AbortSignal | undefined,
+  onMissing: (() => void) | undefined,
+): Promise<TextureAtlas> {
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(url, signal === undefined ? {} : { signal });
+    if (response.ok) return decodeTextureAtlas(new Uint8Array(await response.arrayBuffer()));
+    if (response.status !== 404 || attempt >= ATLAS_RETRIES)
+      throw new Error(`Texture atlas: HTTP ${response.status}`);
+    onMissing?.();
+    await wait(Math.min(500 * 2 ** attempt, 30_000), signal);
   }
 }
 

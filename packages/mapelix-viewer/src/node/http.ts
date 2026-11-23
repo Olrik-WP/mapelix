@@ -92,8 +92,9 @@ type Admit = (buildable: boolean) => Admission;
 
 /**
  * Serves the 3D viewer endpoints below `base`: `world.json`, `regions/<level>/<x>/<z>`,
- * `discoveries/<x>/<z>.bin` and, with a texture stack, `textures/<revision>/atlas.bin` and
- * `textures/<revision>/notices.json`; regions and discoveries take the scene context in the
+ * `discoveries/<x>/<z>.bin` and, with a texture stack, `textures/<revision>/atlas.bin`,
+ * `textures/<revision>/notices.json` and, for packs with texture sets, `normal.bin` and
+ * `mer.bin` beside them; regions and discoveries take the scene context in the
  * query string. A request outside the stored world gets an empty payload
  * (`x-mapelix-cache: empty`), too many waiting builds a 503 with `retry-after`, and a missing
  * world a 503.
@@ -140,7 +141,8 @@ export function createSceneHandler(
         return refusal(request, cause);
       }
     }
-    const texture = /^\/textures\/([0-9a-f]{20})\/(atlas\.bin|notices\.json)$/.exec(path);
+    const texture =
+      /^\/textures\/([0-9a-f]{20})\/(atlas\.bin|normal\.bin|mer\.bin|notices\.json)$/.exec(path);
     if (texture !== null) return textureResponse(server, request, texture, options);
     const region = /^\/regions\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(path);
     if (region !== null) return regionResponse(server, request, url, region, admit, options);
@@ -177,7 +179,15 @@ async function textureResponse(
       return refusal(request, cause);
     return failure(503, `Textures are unavailable: ${cause.message}`);
   }
-  if (atlas === undefined) {
+  const served =
+    atlas === undefined
+      ? undefined
+      : file === "normal.bin"
+        ? atlas.pbr?.normal
+        : file === "mer.bin"
+          ? atlas.pbr?.mer
+          : atlas;
+  if (atlas === undefined || served === undefined) {
     return Response.json(
       { error: "not-cached", message: "No such texture atlas, or it is not built yet" },
       { status: 404, headers: NO_STORE },
@@ -188,7 +198,8 @@ async function textureResponse(
   }
   const accepted = request.headers.get("accept-encoding") ?? "";
   const encoding = /\bbr\b/.test(accepted) ? "br" : /\bgzip\b/.test(accepted) ? "gzip" : undefined;
-  const bytes = encoding === "br" ? atlas.brotli : encoding === "gzip" ? atlas.gzip : atlas.bytes;
+  const bytes =
+    encoding === "br" ? served.brotli : encoding === "gzip" ? served.gzip : served.bytes;
   const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   return new Response(request.method === "HEAD" ? null : (body as ArrayBuffer), {
     headers: {

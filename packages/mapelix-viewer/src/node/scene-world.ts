@@ -104,6 +104,13 @@ export type SceneTextureOptions = TextureStackSource & {
   readonly maxTileSize?: number;
   /** GPU memory the atlas may take with its mipmaps (default 32). */
   readonly budgetMiB?: number;
+  /**
+   * Tile side of the normal and material atlases of packs with texture sets: 16, 32 or 64
+   * (default 32). Smaller when the budget or the largest atlas side asks for it.
+   */
+  readonly pbrTileSize?: number;
+  /** GPU memory both PBR atlases may take with their mipmaps (default 48). */
+  readonly pbrBudgetMiB?: number;
   /** Bounds on reading the packs, per pack and for the stack. */
   readonly limits?: Partial<PackLimits>;
   /** Textured level 0 regions: memory, disk quota and distinct builds waiting (32, 512, 16). */
@@ -139,6 +146,11 @@ export interface WorldTextures {
   readonly revision: string;
   /** The packs in use, highest priority first, as their manifests describe them. */
   readonly packs: readonly ResourcePackInfo[];
+  /**
+   * Present when a pack holds texture sets: the normal and material atlases are served at
+   * `textures/<revision>/normal.bin` and `mer.bin`. `tileSize` is the tile side asked for.
+   */
+  readonly pbr?: { readonly tileSize: number };
 }
 
 /** The texture stack in use, for a health page. */
@@ -154,6 +166,15 @@ export type TextureStats =
         readonly bytes: number;
         readonly gzipBytes: number;
         readonly brotliBytes: number;
+      };
+      readonly pbrAtlases?: {
+        readonly tileSize: number;
+        readonly requestedTileSize: number;
+        readonly sets: number;
+        readonly skipped: number;
+        readonly gpuBytes: number;
+        readonly normalBytes: number;
+        readonly merBytes: number;
       };
     })
   | { readonly error: string };
@@ -279,9 +300,17 @@ export function createSceneServer(options: SceneServerOptions) {
     textureMaxTileSize > 256
   )
     throw new RangeError("textures.maxTileSize must be a power of two from 4 to 256");
+  const pbrTileSize = textureOptions?.pbrTileSize ?? 32;
+  if (![16, 32, 64].includes(pbrTileSize))
+    throw new RangeError("textures.pbrTileSize must be 16, 32 or 64");
   const textureSettings = {
     maxTileSize: textureMaxTileSize,
     budgetBytes: positiveInteger(textureOptions?.budgetMiB ?? 32, "textures.budgetMiB") * MIB,
+    pbr: {
+      tileSize: pbrTileSize,
+      budgetBytes:
+        positiveInteger(textureOptions?.pbrBudgetMiB ?? 48, "textures.pbrBudgetMiB") * MIB,
+    },
     ...(textureOptions?.limits === undefined ? {} : { limits: textureOptions.limits }),
   };
   const texturedSizes = {
@@ -617,7 +646,13 @@ export function createSceneServer(options: SceneServerOptions) {
       discoveries: DISCOVERY_LIMITS,
       ...(textureSet === undefined
         ? {}
-        : { textures: { revision: textureSet.stack.revision, packs: textureSet.stack.packs } }),
+        : {
+            textures: {
+              revision: textureSet.stack.revision,
+              packs: textureSet.stack.packs,
+              ...(textureSet.stack.pbr ? { pbr: { tileSize: pbrTileSize } } : {}),
+            },
+          }),
     };
   }
 
@@ -916,6 +951,19 @@ function textureStats(textures: SceneTextures): TextureStats {
       gzipBytes: atlas.gzip.byteLength,
       brotliBytes: atlas.brotli.byteLength,
     },
+    ...(atlas.pbr === undefined
+      ? {}
+      : {
+          pbrAtlases: {
+            tileSize: atlas.pbr.tileSize,
+            requestedTileSize: atlas.pbr.requestedTileSize,
+            sets: atlas.pbr.sets,
+            skipped: atlas.pbr.skipped.length,
+            gpuBytes: atlas.pbr.gpuBytes,
+            normalBytes: atlas.pbr.normal.bytes.byteLength,
+            merBytes: atlas.pbr.mer.bytes.byteLength,
+          },
+        }),
   };
 }
 

@@ -68,6 +68,8 @@ export function viewerSearch(viewer: MapelixViewer): URLSearchParams {
     if (settings.textures === "on") params.set("textures", "1");
     if (settings.leaves === "detailed") params.set("leaves", "detailed");
   }
+  // Apart from LOW/HD: a profile sets textures, but PBR stays the host's choice.
+  if (settings.pbr === "on") params.set("pbr", "1");
   if (!settings.autoDepth) params.set("autoDepth", "0");
   for (const [name, value] of discoveryFilterSearch(settings.discoveries)) params.set(name, value);
   if (settings.selection)
@@ -123,6 +125,7 @@ export function startFromSearch(params: URLSearchParams): SearchStart {
       DIMENSIONS.map((dimension) => [dimension, colored.split(",").includes(dimension)]),
     );
   if (params.get("leaves") === "detailed") settings.leaves = "detailed";
+  if (params.get("pbr") === "1") settings.pbr = "on";
   const profile = params.get("profile");
   if (profile === "low" || profile === "hd")
     Object.assign(settings, renderProfileSettings(profile), { renderProfile: profile });

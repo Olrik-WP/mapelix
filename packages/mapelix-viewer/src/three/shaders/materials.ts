@@ -18,6 +18,8 @@ import {
   cameraPosition,
   cameraProjectionMatrixInverse,
   color,
+  dFdx,
+  dFdy,
   dot,
   exp,
   float,
@@ -31,6 +33,7 @@ import {
   mix,
   modelScale,
   normalWorld,
+  normalWorldGeometry,
   normalize,
   perspectiveDepthToViewZ,
   positionView,
@@ -41,6 +44,7 @@ import {
   select,
   sin,
   smoothstep,
+  sqrt,
   time,
   transformNormalToView,
   uniform,
@@ -144,13 +148,13 @@ const positionCell = positionWorld.div(modelScale.x);
 
 /** A stable random value per cell, so flat colors read as individual blocks. */
 const blockNoise = Fn(() => {
-  const block = positionCell.sub(normalWorld.mul(0.01)).floor();
+  const block = positionCell.sub(normalWorldGeometry.mul(0.01)).floor();
   return hash(block.x.mul(12.9898).add(block.y.mul(78.233)).add(block.z.mul(37.719)));
 });
 
 /** Soft darkening along cell edges while cells are large on screen. */
 const blockBevel = Fn(() => {
-  const n = abs(normalWorld);
+  const n = abs(normalWorldGeometry);
   const planar = select(
     n.y.greaterThan(0.5),
     positionCell.xz,
@@ -190,7 +194,7 @@ function blockLight(atmosphere: Atmosphere): Node<"vec3"> {
  * color, like Minecraft's grass block side, instead of a flat band of dirt.
  */
 const coveredSoil = Fn(() => {
-  const n = abs(normalWorld);
+  const n = abs(normalWorldGeometry);
   const along = select(n.x.greaterThan(0.5), positionCell.z, positionCell.x);
   const pixel = along.mul(16).floor().add(positionCell.y.floor().mul(131));
   const strip = float(2).add(hash(pixel).mul(3).floor()).div(16);
@@ -214,16 +218,37 @@ function createTerrainMaterial(
   const contact = mix(float(0.8), float(1), quadOcclusion);
   const glowing = quadMaterial.equal(QuadMaterial.Emissive);
   const bevel = select(glowing, float(1), blockBevel());
-  const wet = atmosphere.rain.mul(normalWorld.y.max(0)).mul(select(foliage.or(glowing), 0, 1));
+  const wet = atmosphere.rain
+    .mul(normalWorldGeometry.y.max(0))
+    .mul(select(foliage.or(glowing), 0, 1));
   const surface = coveredSoil().mul(variation).mul(bevel);
   material.colorNode = (look === undefined ? surface : look.terrain(surface))
     .mul(contact)
     .mul(float(1).sub(wet.mul(0.12)));
-  material.roughnessNode = mix(1, 0.24, wet);
+  const pbr = look?.pbr;
+  // PBR: metalness (x), emissive (y) and roughness (z) of the texel, flat without a texture set.
+  const mer = look !== undefined && pbr !== undefined ? look.pbrMaterial(pbr) : undefined;
+  // Rain makes plain tops shine. A pack's material only gets glossier with it: halved roughness,
+  // never below `PBR_WET_ROUGHNESS`, so wet ground does not turn into a mirror of the sun.
+  const roughness =
+    mer === undefined
+      ? mix(float(1), 0.24, wet)
+      : mix(mer.z, mer.z.mul(0.5).max(PBR_WET_ROUGHNESS), wet);
+  material.roughnessNode = roughness;
   material.aoNode = quadOcclusion;
+  if (look !== undefined && pbr !== undefined && mer !== undefined) {
+    // Water fills the grooves: wet ground loses part of its relief, so it does not shine with
+    // a highlight on every texel.
+    const bent = normalize(mix(look.pbrNormal(pbr), normalWorldGeometry, wet.mul(PBR_WET_FLATTEN)));
+    material.normalNode = transformNormalToView(bent);
+    material.roughnessNode = filteredRoughness(bent, roughness);
+    // Without reflections of the scene, fully metallic texels would turn black: they keep
+    // some of their diffuse color.
+    material.metalnessNode = mer.x.mul(PBR_METALNESS);
+  }
   // Lamps glow harder at night, bright enough for the bloom pass to pick them up.
   const glow = mix(float(4.2), float(1.4), atmosphere.daylight);
-  material.emissiveNode = select(
+  const emissive = select(
     glowing,
     (look === undefined ? quadColor : look.terrain(quadColor)).mul(glow),
     // Local fill follows sky occlusion; emissive output otherwise bypasses material.aoNode.
@@ -231,7 +256,37 @@ function createTerrainMaterial(
       max(vec3(atmosphere.caveLight), blockLight(atmosphere).mul(quadOcclusion)),
     ),
   );
+  // Emissive texels (ores, lamps) keep their own color in the dark; they light nothing else.
+  material.emissiveNode =
+    mer === undefined
+      ? emissive
+      : emissive.add(
+          material.colorNode.mul(mer.y).mul(mix(float(2.4), float(1), atmosphere.daylight)),
+        );
   return material;
+}
+
+/** Share of a texel's metalness the terrain shows, see `createTerrainMaterial`. */
+const PBR_METALNESS = 0.6;
+/** Share of the normal map's relief that rain smooths out on wet ground. */
+const PBR_WET_FLATTEN = 0.6;
+/** Lowest roughness rain gives a pack's material. */
+const PBR_WET_ROUGHNESS = 0.42;
+/** Scale and cap of the roughness added by `filteredRoughness` (Filament's defaults). */
+const SPECULAR_AA_VARIANCE = 0.15;
+const SPECULAR_AA_THRESHOLD = 0.2;
+
+/**
+ * Raises roughness where the normal turns faster than the screen's pixels can show, so bumpy
+ * terrain does not sparkle with one highlight per texel in the distance (Kaplanyan and
+ * Hoffman's specular anti-aliasing, as in Filament).
+ */
+function filteredRoughness(normal: Node<"vec3">, roughness: Node<"float">): Node<"float"> {
+  const du = dFdx(normal);
+  const dv = dFdy(normal);
+  const variance = dot(du, du).add(dot(dv, dv)).mul(SPECULAR_AA_VARIANCE);
+  const kernel = min(variance.mul(2), SPECULAR_AA_THRESHOLD);
+  return sqrt(roughness.mul(roughness).add(kernel).clamp(0, 1));
 }
 
 /** Procedural sprite masks for crossed plant quads, in `PlantSprite` order. */

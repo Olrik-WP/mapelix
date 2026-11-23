@@ -15,6 +15,7 @@ import {
   type PackLimits,
 } from "./pack-limits.js";
 import { readStackFile } from "./stack-file.js";
+import { TEXTURE_SET_SUFFIX, parseTextureSet, type TextureSet } from "./texture-sets.js";
 
 /** What a pack says about itself in `manifest.json`, for the host to show. */
 export interface ResourcePackInfo {
@@ -301,7 +302,23 @@ export interface ResourcePackStack {
   readImage(path: string): Promise<PackImage | undefined>;
   /** The images skipped so far, in the order they were met. */
   skippedImages(): readonly SkippedImage[];
+  /** Whether a pack holds texture sets (`*.texture_set.json`). */
+  readonly hasTextureSets: boolean;
+  /**
+   * The texture set of the color image at `path` (no extension): only from the pack the color
+   * comes from, so a pack that replaces a color without a set drops the set of a pack below.
+   * Undefined without one; `reason` when the set cannot be used.
+   */
+  textureSet(path: string): Promise<FoundTextureSet | undefined>;
+  /** Decodes an image of one pack (path without extension); throws when it cannot. */
+  readPackImage(pack: ResourcePack, path: string): Promise<PackImage>;
 }
+
+/** A texture set found for a color image, or why it was ignored. */
+export type FoundTextureSet = {
+  readonly pack: ResourcePack;
+  readonly file: string;
+} & ({ readonly set: TextureSet } | { readonly reason: string });
 
 /** An image a pack holds but the stack could not use; the next pack's image, if any, is used. */
 export interface SkippedImage {
@@ -411,6 +428,22 @@ export async function openResourcePackStack(
       hash.update(`${path}\0${pack.info.uuid}\0${file}\0${await pack.files.digest(file)}\n`);
     }
   }
+  // Texture sets and their layers: every set and image of the packs holding sets. Stacks
+  // without sets hash as before, so their revision does not change.
+  const setPacks = packs.filter((pack) =>
+    [...pack.files.sizes.keys()].some((path) => path.endsWith(TEXTURE_SET_SUFFIX)),
+  );
+  for (const pack of setPacks) {
+    hash.update(`texture-sets\0${pack.info.uuid}\n`);
+    const files = [...pack.files.sizes.keys()]
+      .filter(
+        (path) =>
+          path.endsWith(TEXTURE_SET_SUFFIX) ||
+          IMAGE_EXTENSIONS.some((extension) => path.endsWith(extension)),
+      )
+      .sort();
+    for (const file of files) hash.update(`${file}\0${await pack.files.digest(file)}\n`);
+  }
   const fingerprint = hash.digest("hex").slice(0, 20);
 
   type Usable = { pack: ResourcePack; file: string; width: number; height: number };
@@ -452,9 +485,45 @@ export async function openResourcePackStack(
     }
     return found;
   };
+  const readPackImage = async (pack: ResourcePack, path: string): Promise<PackImage> => {
+    for (const extension of IMAGE_EXTENSIONS) {
+      const file = `${path}${extension}`;
+      if (!pack.files.sizes.has(file)) continue;
+      return decodePackImage(await pack.files.read(file), file, limits);
+    }
+    throw new ResourcePackError(pack.files.label, "is missing", path);
+  };
+  const sets = new Map<string, Promise<FoundTextureSet | undefined>>();
+  const textureSet = (path: string): Promise<FoundTextureSet | undefined> => {
+    let found = sets.get(path);
+    if (found === undefined) {
+      found = (async () => {
+        const color = await resolve(path);
+        if (color === undefined) return undefined;
+        const file = `${path}${TEXTURE_SET_SUFFIX}`;
+        if (!color.pack.files.sizes.has(file)) return undefined;
+        let parsed: TextureSet | string;
+        try {
+          parsed = parseTextureSet(parsePackJson(await color.pack.files.read(file)), file);
+        } catch (error) {
+          if (error instanceof ResourcePackChangedError) throw error;
+          parsed = `is not valid JSON: ${(error as Error).message}`;
+        }
+        return typeof parsed === "string"
+          ? { pack: color.pack, file, reason: parsed }
+          : { pack: color.pack, file, set: parsed };
+      })();
+      sets.set(path, found);
+      found.catch(() => sets.delete(path));
+    }
+    return found;
+  };
   return {
     packs,
     fingerprint,
+    hasTextureSets: setPacks.length > 0,
+    textureSet,
+    readPackImage,
     terrainEntry: (name) => first((pack) => pack.terrain.get(name)),
     blockTextures: (block) => first((pack) => pack.blocks.get(block.replace(/^minecraft:/, ""))),
     flipbook: (name) => first((pack) => pack.flipbooks.get(name)),

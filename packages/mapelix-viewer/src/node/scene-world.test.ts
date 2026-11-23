@@ -410,6 +410,53 @@ describe("scene server", () => {
     await plain.close();
   });
 
+  it("builds, stores and reads back the PBR atlases of a pack with texture sets", async () => {
+    const pack = join(root, "pbr.zip");
+    await writeFile(
+      pack,
+      makeZip(
+        packFiles({
+          terrain: { stone: { textures: "textures/blocks/stone" } },
+          blocks: { stone: { textures: "stone" } },
+          images: {
+            "textures/blocks/stone.png": makePng(16, [9, 8, 7, 255]),
+            "textures/blocks/stone.texture_set.json": new TextEncoder().encode(
+              JSON.stringify({
+                format_version: "1.16.100",
+                "minecraft:texture_set": {
+                  color: "stone",
+                  metalness_emissive_roughness: [0, 200, 100],
+                },
+              }),
+            ),
+          },
+        }),
+      ),
+    );
+    const textured = { ...options, textures: { packs: [pack], pbrTileSize: 16 } };
+    const server = createSceneServer(textured);
+    const metadata = await server.getWorldMetadata();
+    expect(metadata.textures?.pbr).toEqual({ tileSize: 16 });
+    const revision = metadata.textures!.revision;
+    const loaded = (await server.loadTextureAtlas(revision))!;
+    const material = decodeTextureAtlas(loaded.pbr!.mer.bytes);
+    const at = (4 * 24 + 4) * 4;
+    expect(Array.from(material.levels[0]!.subarray(at, at + 4))).toEqual([0, 200, 100, 255]);
+    expect(loaded.pbr).toMatchObject({ tileSize: 16, sets: 1, skipped: [] });
+    expect((await server.stats()).textures).toMatchObject({ pbrAtlases: { sets: 1 } });
+    await server.close();
+
+    // A restart reads both PBR atlases back with the color atlas.
+    const restarted = createSceneServer(textured);
+    const stored = await restarted.loadTextureAtlas(revision, { cacheOnly: true });
+    expect(stored?.pbr?.mer.bytes).toEqual(loaded.pbr!.mer.bytes);
+    expect(stored?.pbr?.normal.brotli).toEqual(loaded.pbr!.normal.brotli);
+    await restarted.close();
+    expect(() =>
+      createSceneServer({ ...options, textures: { packs: [pack], pbrTileSize: 8 } }),
+    ).toThrow(RangeError);
+  });
+
   it("builds textured level 0 Surface regions apart, with the atlas index, and prewarms them", async () => {
     const pack = join(root, "pack.zip");
     await writeFile(

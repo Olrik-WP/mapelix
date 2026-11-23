@@ -175,6 +175,10 @@ the complete selected snapshot without rendering or writing files, and prints a 
 - **Light:** one atlas of every texture (about 6 MiB on the GPU and 630 KiB to download for the
   vanilla pack), textured regions only near the camera, and the untextured view unchanged pixel
   for pixel. **Detailed leaves** cut out leaf holes, at about twice the geometry in forests.
+- **PBR materials:** packs with texture sets (normal or height maps, metalness, emissive and
+  roughness) can bend each textured block with its normal map and give it its materials;
+  emissive texels such as ores glow in the dark. Off by default: the `pbr` option,
+  `setPbr("on")`, or the "PBR materials" switch ([details](docs/texture-stack.md#pbr-materials-texture-sets)).
 - Mapelix never ships or downloads a pack itself; the host gives the packs. The demo can
   download Mojang's vanilla pack (Bedrock samples on GitHub) when asked to.
 

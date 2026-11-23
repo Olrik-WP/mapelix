@@ -733,6 +733,10 @@ export class ViewerControls {
     markers.dataset.part = "show-markers";
     const leaves = this.check(t.detailedLeaves, (on) => viewer.setLeaves(on ? "detailed" : "fast"));
     leaves.dataset.part = "leaves";
+    const pbr = this.check(t.pbrMaterials ?? "PBR materials", (on) =>
+      viewer.setPbr(on ? "on" : "off"),
+    );
+    pbr.dataset.part = "pbr";
     const texturesNote = make("p", undefined);
     texturesNote.dataset.part = "textures-note";
     view.append(
@@ -749,6 +753,7 @@ export class ViewerControls {
       wrapperOf(mobile),
       wrapperOf(markers),
       wrapperOf(leaves),
+      wrapperOf(pbr),
       texturesNote,
     );
     if (this.texturesLink !== undefined) {
@@ -1182,6 +1187,17 @@ export class ViewerControls {
       leaves.checked = settings.leaves === "detailed";
       // Only textured leaves have a detailed look.
       show(wrapperOf(leaves), settings.renderProfile === undefined && settings.textures === "on");
+    }
+    const pbr = this.part<HTMLInputElement>("pbr");
+    if (pbr) {
+      pbr.checked = settings.pbr === "on";
+      // Only for textured terrain from packs with texture sets.
+      show(
+        wrapperOf(pbr),
+        settings.textures === "on" &&
+          status.pbr !== undefined &&
+          status.pbr.state !== "unavailable",
+      );
     }
     const texturesNote = this.part("textures-note");
     if (texturesNote) {

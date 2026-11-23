@@ -16,6 +16,8 @@ import {
   type ResourcePackInfo,
   type ResourcePackStack,
   type SkippedImage,
+  type SkippedTextureSet,
+  type TextureAtlasOptions,
   type TextureIndex,
   type TextureNotice,
   type TextureStackSource,
@@ -23,6 +25,27 @@ import {
 
 const gzipAsync = promisify(gzip);
 const brotliAsync = promisify(brotliCompress);
+
+/** An encoded file and its gzip and Brotli encodings, served as they are. */
+export interface EncodedFile {
+  readonly bytes: Uint8Array;
+  readonly gzip: Uint8Array;
+  readonly brotli: Uint8Array;
+}
+
+/** The normal (`normal.bin`) and material (`mer.bin`) atlases of a stack with texture sets. */
+export interface ScenePbrAtlases {
+  readonly tileSize: number;
+  /** The tile size asked for; the budget or the largest atlas side may have made it smaller. */
+  readonly requestedTileSize: number;
+  readonly sets: number;
+  /** GPU bytes of both atlases with their mipmaps. */
+  readonly gpuBytes: number;
+  readonly normal: EncodedFile;
+  readonly mer: EncodedFile;
+  /** Texture sets the atlases could not use; their tiles stay flat. */
+  readonly skipped: readonly SkippedTextureSet[];
+}
 
 /** A built atlas, ready to serve and to build regions with. */
 export interface SceneAtlas {
@@ -39,12 +62,41 @@ export interface SceneAtlas {
   readonly notices: readonly TextureNotice[];
   /** Images the packs hold but the atlas could not use; the next pack's took their place. */
   readonly skipped: readonly SkippedImage[];
+  /** Present when the stack holds texture sets. */
+  readonly pbr?: ScenePbrAtlases;
 }
 
 export interface SceneTextureOptions {
   readonly maxTileSize: number;
   readonly budgetBytes: number;
+  /** The PBR atlases' tile size and budget; used only by stacks with texture sets. */
+  readonly pbr?: { readonly tileSize: number; readonly budgetBytes: number };
   readonly limits?: Partial<PackLimits>;
+}
+
+/** The atlas options of `stack`: `pbr` only when a pack holds texture sets. */
+function atlasSettings(
+  stack: ResourcePackStack,
+  options: SceneTextureOptions,
+): TextureAtlasOptions {
+  return {
+    maxTileSize: options.maxTileSize,
+    budgetBytes: options.budgetBytes,
+    ...(options.pbr !== undefined && stack.hasTextureSets ? { pbr: options.pbr } : {}),
+  };
+}
+
+async function encodeFile(bytes: Uint8Array): Promise<EncodedFile> {
+  const [gzipped, brotli] = await Promise.all([
+    gzipAsync(bytes, { level: 9 }),
+    brotliAsync(bytes, {
+      params: {
+        [constants.BROTLI_PARAM_QUALITY]: 9,
+        [constants.BROTLI_PARAM_SIZE_HINT]: bytes.byteLength,
+      },
+    }),
+  ]);
+  return { bytes, gzip: new Uint8Array(gzipped), brotli: new Uint8Array(brotli) };
 }
 
 type Event = (name: string, detail: Record<string, unknown>) => void;
@@ -57,6 +109,15 @@ const ATLAS_FILES = [
   "notices.json",
   "skipped.json",
 ];
+const PBR_FILES = [
+  "normal.bin",
+  "normal.bin.gz",
+  "normal.bin.br",
+  "mer.bin",
+  "mer.bin.gz",
+  "mer.bin.br",
+  "pbr.json",
+];
 
 /**
  * The textures of one resource pack stack. Opening reads the packs' JSON and names the texture
@@ -67,6 +128,8 @@ const ATLAS_FILES = [
 export class SceneTextures {
   readonly revision: string;
   readonly packs: readonly ResourcePackInfo[];
+  /** Whether the atlas comes with PBR atlases: a pack holds texture sets. */
+  readonly pbr: boolean;
   private readonly stack: ResourcePackStack;
   private readonly options: SceneTextureOptions;
   private readonly folder: string;
@@ -86,6 +149,7 @@ export class SceneTextures {
     this.stack = stack;
     this.revision = revision;
     this.packs = stack.packs.map((pack) => pack.info);
+    this.pbr = atlasSettings(stack, options).pbr !== undefined;
     this.folder = folder;
     this.options = options;
     this.event = event;
@@ -98,11 +162,13 @@ export class SceneTextures {
     event: Event,
   ): Promise<SceneTextures> {
     const stack = await openResourcePackStack(source, options.limits);
-    const revision = textureRevision(stack.fingerprint, options);
+    const revision = textureRevision(stack.fingerprint, atlasSettings(stack, options));
     const root = atlasRoot(cacheDirectory);
     const textures = new SceneTextures(stack, revision, join(root, revision), options, event);
     const startedAt = performance.now();
-    textures.atlas = await readStored(textures.folder, revision).catch(() => undefined);
+    textures.atlas = await readStored(textures.folder, revision, textures.pbr).catch(
+      () => undefined,
+    );
     if (textures.atlas !== undefined) {
       event("textures.cache-hit", {
         revision,
@@ -153,6 +219,7 @@ export class SceneTextures {
       brotliBytes: atlas.brotli.byteLength,
       notices: atlas.notices,
       skipped: atlas.skipped,
+      ...(atlas.pbr === undefined ? {} : { pbr: pbrReport(atlas.pbr) }),
     });
   }
 
@@ -178,29 +245,33 @@ export class SceneTextures {
   private async build(): Promise<SceneAtlas> {
     const startedAt = performance.now();
     try {
-      const built = await buildTextureAtlas(this.stack, this.options);
-      const [gzipped, brotli] = await Promise.all([
-        gzipAsync(built.bytes, { level: 9 }),
-        brotliAsync(built.bytes, {
-          params: {
-            [constants.BROTLI_PARAM_QUALITY]: 9,
-            [constants.BROTLI_PARAM_SIZE_HINT]: built.bytes.byteLength,
-          },
-        }),
-      ]);
+      const built = await buildTextureAtlas(this.stack, atlasSettings(this.stack, this.options));
+      const encoded = await encodeFile(built.bytes);
+      const pbr: ScenePbrAtlases | undefined =
+        built.pbr === undefined
+          ? undefined
+          : {
+              tileSize: built.pbr.tileSize,
+              requestedTileSize: built.pbr.requestedTileSize,
+              sets: built.pbr.sets,
+              gpuBytes: built.pbr.gpuBytes,
+              normal: await encodeFile(built.pbr.normalBytes),
+              mer: await encodeFile(built.pbr.materialBytes),
+              skipped: built.pbr.skipped,
+            };
       const atlas: SceneAtlas = {
         revision: built.fingerprint,
         tileSize: built.atlas.tileSize,
         tiles: built.atlas.tiles.length,
         gpuBytes: built.gpuBytes,
-        bytes: built.bytes,
-        gzip: new Uint8Array(gzipped),
-        brotli: new Uint8Array(brotli),
+        ...encoded,
         index: built.index,
         notices: built.notices,
         skipped: built.skipped,
+        ...(pbr === undefined ? {} : { pbr }),
       };
-      const contents = [
+      const names = [...ATLAS_FILES];
+      const contents: (Uint8Array | string)[] = [
         atlas.bytes,
         atlas.gzip,
         atlas.brotli,
@@ -208,9 +279,15 @@ export class SceneTextures {
         JSON.stringify(atlas.notices),
         JSON.stringify(atlas.skipped),
       ];
+      if (pbr !== undefined) {
+        const { normal, mer, ...summary } = pbr;
+        names.push(...PBR_FILES);
+        contents.push(normal.bytes, normal.gzip, normal.brotli, mer.bytes, mer.gzip, mer.brotli);
+        contents.push(JSON.stringify(summary));
+      }
       if (!this.retired) {
         await mkdir(this.folder, { recursive: true });
-        for (const [index, name] of ATLAS_FILES.entries()) {
+        for (const [index, name] of names.entries()) {
           const temporary = join(this.folder, `${name}.${process.pid}.tmp`);
           await writeFile(temporary, contents[index]!);
           await rename(temporary, join(this.folder, name));
@@ -229,6 +306,14 @@ export class SceneTextures {
         brotliBytes: atlas.brotli.byteLength,
         gzipBytes: atlas.gzip.byteLength,
         milliseconds: Math.round(performance.now() - startedAt),
+        ...(pbr === undefined
+          ? {}
+          : {
+              pbrTileSize: pbr.tileSize,
+              pbrSets: pbr.sets,
+              pbrGpuBytes: pbr.gpuBytes,
+              pbrSkipped: pbr.skipped.length,
+            }),
       });
       if (atlas.skipped.length > 0) {
         this.event("textures.images-skipped", {
@@ -249,7 +334,7 @@ function atlasRoot(cacheDirectory: string): string {
   return join(cacheDirectory, "textures", `atlas-v${ATLAS_FORMAT_VERSION}`);
 }
 
-async function readStored(folder: string, revision: string): Promise<SceneAtlas> {
+async function readStored(folder: string, revision: string, pbr: boolean): Promise<SceneAtlas> {
   const [bytes, gzipped, brotli, indexText, noticesText, skippedText] = await Promise.all(
     ATLAS_FILES.map((name) => readFile(join(folder, name))),
   );
@@ -257,6 +342,23 @@ async function readStored(folder: string, revision: string): Promise<SceneAtlas>
   const atlas = decodeTextureAtlas(view);
   const index = JSON.parse(indexText!.toString("utf8")) as TextureIndex;
   if (index.fingerprint !== revision) throw new Error("Stored texture index is damaged");
+  let pbrAtlases: ScenePbrAtlases | undefined;
+  if (pbr) {
+    const files = await Promise.all(PBR_FILES.map((name) => readFile(join(folder, name))));
+    const file = (at: number) => new Uint8Array(files[at]!);
+    const normal = decodeTextureAtlas(file(0));
+    decodeTextureAtlas(file(3));
+    const summary = JSON.parse(files[6]!.toString("utf8")) as Omit<
+      ScenePbrAtlases,
+      "normal" | "mer"
+    >;
+    if (normal.tileSize !== summary.tileSize) throw new Error("Stored PBR atlases are damaged");
+    pbrAtlases = {
+      ...summary,
+      normal: { bytes: file(0), gzip: file(1), brotli: file(2) },
+      mer: { bytes: file(3), gzip: file(4), brotli: file(5) },
+    };
+  }
   return {
     revision,
     tileSize: atlas.tileSize,
@@ -268,6 +370,32 @@ async function readStored(folder: string, revision: string): Promise<SceneAtlas>
     index,
     notices: JSON.parse(noticesText!.toString("utf8")) as TextureNotice[],
     skipped: JSON.parse(skippedText!.toString("utf8")) as SkippedImage[],
+    ...(pbrAtlases === undefined ? {} : { pbr: pbrAtlases }),
+  };
+}
+
+/** What a report says of the PBR atlases. */
+export interface PbrReport {
+  readonly tileSize: number;
+  readonly requestedTileSize: number;
+  /** Texture sets read and used. */
+  readonly sets: number;
+  readonly gpuBytes: number;
+  readonly normalBytes: number;
+  readonly merBytes: number;
+  /** Texture sets ignored, with why: a missing image, an unknown format, an invalid value. */
+  readonly skipped: readonly SkippedTextureSet[];
+}
+
+function pbrReport(pbr: ScenePbrAtlases): PbrReport {
+  return {
+    tileSize: pbr.tileSize,
+    requestedTileSize: pbr.requestedTileSize,
+    sets: pbr.sets,
+    gpuBytes: pbr.gpuBytes,
+    normalBytes: pbr.normal.bytes.byteLength,
+    merBytes: pbr.mer.bytes.byteLength,
+    skipped: pbr.skipped,
   };
 }
 
@@ -294,6 +422,8 @@ export interface TextureStackReport {
    * the same image of the next pack, or left untextured when no pack has a usable one.
    */
   readonly skipped?: readonly SkippedImage[];
+  /** The PBR atlases, for a stack with texture sets. */
+  readonly pbr?: PbrReport;
 }
 
 /**
@@ -304,13 +434,14 @@ export async function validateTextureStack(
   source: TextureStackSource,
   options: Partial<SceneTextureOptions> = {},
 ): Promise<TextureStackReport> {
-  const settings = {
+  const settings: SceneTextureOptions = {
     maxTileSize: options.maxTileSize ?? 32,
     budgetBytes: options.budgetBytes ?? 32 * 1024 * 1024,
+    pbr: options.pbr ?? { tileSize: 32, budgetBytes: 48 * 1024 * 1024 },
   };
   try {
     const stack = await openResourcePackStack(source, options.limits);
-    const built = await buildTextureAtlas(stack, settings);
+    const built = await buildTextureAtlas(stack, atlasSettings(stack, settings));
     const [gzipped, brotli] = await Promise.all([
       gzipAsync(built.bytes, { level: 9 }),
       brotliAsync(built.bytes, {
@@ -326,6 +457,19 @@ export async function validateTextureStack(
       brotliBytes: brotli.byteLength,
       notices: built.notices,
       skipped: built.skipped,
+      ...(built.pbr === undefined
+        ? {}
+        : {
+            pbr: {
+              tileSize: built.pbr.tileSize,
+              requestedTileSize: built.pbr.requestedTileSize,
+              sets: built.pbr.sets,
+              gpuBytes: built.pbr.gpuBytes,
+              normalBytes: built.pbr.normalBytes.byteLength,
+              merBytes: built.pbr.materialBytes.byteLength,
+              skipped: built.pbr.skipped,
+            },
+          }),
     });
   } catch (cause) {
     return failedReport(cause);
@@ -343,10 +487,12 @@ async function stackReport(
   {
     notices,
     skipped,
+    pbr,
     ...atlas
   }: NonNullable<TextureStackReport["atlas"]> & {
     readonly notices: readonly TextureNotice[];
     readonly skipped: readonly SkippedImage[];
+    readonly pbr?: PbrReport;
   },
 ): Promise<TextureStackReport> {
   const packs = [];
@@ -362,5 +508,6 @@ async function stackReport(
     atlas,
     notices,
     skipped,
+    ...(pbr === undefined ? {} : { pbr }),
   };
 }

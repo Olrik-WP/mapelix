@@ -226,6 +226,89 @@ its block colors.
   seconds, at most 30 between tries, about a minute and a half in all, and checks `world.json` at
   each miss in case the stack changed. No page reload is needed.
 
+## PBR materials (texture sets)
+
+Physically based packs put a `<texture>.texture_set.json` next to block textures. Mapelix reads
+them and, when the host asks, bends textured terrain with their normal maps and gives it their
+materials: metalness and roughness change how the sun and the sky light each texel, and
+emissive texels (ores, lamps, lava) keep their own color in the dark. It is rasterized lighting
+in WebGPU or WebGL 2: no ray tracing, no reflections of the scene.
+
+### What is read
+
+- Formats `1.16.100` and `1.21.30`, and later versions that keep the same layers; earlier ones
+  are ignored and reported.
+- Layers: `normal` (tangent space, green toward the bottom of the texture, as Bedrock packs
+  draw them) or `heightmap` (gray levels, turned into normals with a Sobel filter when the
+  atlas is built), and `metalness_emissive_roughness` (MER) or
+  `metalness_emissive_roughness_subsurface` (MERS; subsurface is read and ignored). The
+  `color` layer is not read: the color comes from the pack's texture as before.
+- A layer is an image of the same folder (PNG or TGA, run-length encoded or not), or, for MER,
+  one value for the whole texture: `[r, g, b]` from 0 to 255 or `#RRGGBB(AA)`.
+- A set applies only to the color image of its own pack. A pack higher in the stack that
+  replaces a texture without a set drops the set of the pack below for it: no normal map of
+  one pack lies on the color of another.
+- A set that cannot be used (unknown format, missing or damaged image, invalid value) is
+  skipped and reported; its tiles stay flat. It never stops the stack. The same pack limits
+  apply to the layer images.
+
+### Atlases
+
+Two more atlases, `normal.bin` and `mer.bin`, have the cells and tiles of the color atlas,
+animations included, at their own tile size: `textures.pbrTileSize` 16, 32 (default) or 64. They
+shrink, together, until both fit `textures.pbrBudgetMiB` (48 by default) and the largest atlas
+side (2048 texels); `stats().textures.pbrAtlases` and `WorldStatus.pbr` give the size asked for
+and the size used. Normals are renormalized at each mipmap level. A tile without a set holds a
+flat normal and a material with no metal, no glow and full roughness, so it draws as without
+PBR.
+
+They are built with the color atlas, by its first request or a prewarm, stored beside it, and
+never built by a cache-only handler. The routes are those of the color atlas:
+`textures/<revision>/normal.bin` and `textures/<revision>/mer.bin`, immutable, Brotli or gzip
+encoded; they answer 404 for a stack without texture sets. `world.json` says
+`textures.pbr: { tileSize }` when the packs hold sets.
+
+The texture revision covers the sets and their images, and the PBR options, only for stacks
+with texture sets: other stacks keep their revision, atlas and regions byte for byte. Regions
+do not change: the PBR data lives in the atlases, found by the same tile number.
+
+### In the viewer
+
+PBR is off by default. The host turns it on with the `pbr` option or `setPbr("on")`, the settings
+panel shows a "PBR materials" switch once textures are on and the packs have sets, and the
+address keeps `pbr=1`. It needs textures on and applies wherever textures do.
+`WorldStatus.pbr.state` is `off`, `unavailable` (no texture set), `loading`, `on` or `failed`
+(the PBR atlases did not load; textures stay).
+
+- The terrain shader takes the face's tangent and bitangent from its normal and the texture's
+  quarter turns: block faces are aligned with the axes, so it needs no tangent attribute and
+  no varying beyond those textured terrain already uses.
+- Metalness is shown at 60 %: without reflections of the scene, fully metallic texels would
+  turn black. Roughness replaces the full roughness of plain terrain, and rain still makes tops
+  shine.
+- Rain makes a pack's material glossier, halving its roughness but never below 0.42, and smooths
+  out part of the relief of wet tops, as water fills the grooves: wet ground shines without
+  turning into a mirror or a highlight on every texel.
+- Roughness rises where the normal turns faster than the screen's pixels can show (specular
+  anti-aliasing, as in Filament), so bumpy terrain does not sparkle in the distance.
+- Emissive texels are added after lighting, stronger at night, and do not light other blocks.
+- Plants, water, lava, glass, clouds and rain keep their own materials.
+
+### Measurements
+
+Reference stack: a PBR pack (normal maps, MER and MERS) over the vanilla pack, 1,716 tiles of
+32 texels in the color atlas (20.1 MiB on the GPU), on a desktop.
+
+- 1,206 texture sets used; one, without any layer, skipped and reported.
+- PBR atlases on the GPU: 40.2 MiB with 32-texel tiles, 9.9 MiB with 16. 64-texel tiles of
+  1,716 textures would make atlases wider than 2048 texels, so they are reduced to 32.
+- Build: about 2.0 s for the color atlas alone, 4.2 s with both PBR atlases.
+- Files, raw / Brotli / gzip: color atlas 21.1 / 3.1 / 4.7 MB, `normal.bin` 21.1 / 2.0 /
+  3.5 MB, `mer.bin` 21.1 / 1.3 / 2.2 MB.
+- First textured frame: about 2.3 s without PBR, 3.0 s with it, frame rate unchanged.
+- Without texture sets in the stack, the color atlas, its revision and the regions are the
+  same byte for byte.
+
 ## Checking a stack
 
 `validateTextureStack(source, options)` from `@mapelix/viewer/node`, or the release's
@@ -237,7 +320,11 @@ writes nothing.
 node mapelix-textures.js /srv/packs/world-1
 node mapelix-textures.js --packs mine.mcpack vanilla.zip
 node mapelix-textures.js --packs mine.mcpack vanilla.zip --max-tile-size 32 --budget-mib 64
+node mapelix-textures.js --packs pbr.mcpack vanilla.zip --pbr-tile-size 16 --pbr-budget-mib 32
 ```
+
+For packs with texture sets the report adds `pbr`: the tile size asked for and used, the sets
+used, the GPU and file sizes of both atlases, and the sets skipped with why.
 
 `--packs` takes packs highest priority first, like the `packs` option. `--max-tile-size` and
 `--budget-mib` are the atlas options of the server. In a checkout, the command is

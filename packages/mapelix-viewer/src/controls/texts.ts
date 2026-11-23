@@ -62,6 +62,8 @@ export interface ControlTexts {
   readonly frameRate: (fps: number | undefined) => string;
   readonly texturesUnavailable: string;
   readonly detailedLeaves: string;
+  /** Optional for hosts with their own texts; English otherwise. */
+  readonly pbrMaterials?: string;
   readonly texturesFailed: string;
   readonly rain: string;
   readonly thunderstorm: string;
@@ -157,6 +159,7 @@ export const DEFAULT_CONTROL_TEXTS: ControlTexts = {
   frameRate: (fps) => `${fps && Number.isFinite(fps) ? Math.round(fps) : "—"} FPS`,
   texturesUnavailable: "This world has no block textures.",
   detailedLeaves: "Detailed leaves",
+  pbrMaterials: "PBR materials",
   texturesFailed: "Block textures could not load; blocks keep their colors.",
   rain: "Rain",
   thunderstorm: "Thunderstorm",

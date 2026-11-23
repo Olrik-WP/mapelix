@@ -57,7 +57,7 @@ import {
   type SceneMaterials,
 } from "./shaders/materials";
 import { DEFAULT_TEXTURE_FADE, TextureLook, type TextureFade } from "./shaders/textured";
-import { BlockAtlas } from "./block-atlas";
+import { BlockAtlas, PbrAtlas } from "./block-atlas";
 import {
   mobilePixelRatio,
   mobileViewDistance,
@@ -82,12 +82,22 @@ export interface WorldInfo extends SceneContextInput {
   readonly revision: string;
   readonly snapshotRevision?: string;
   readonly discoveries?: { readonly schemaVersion: number; readonly tileSpan: number };
-  /** Present when the server has block textures; the revision names its atlas and regions. */
-  readonly textures?: { readonly revision: string };
+  /**
+   * Present when the server has block textures; the revision names its atlas and regions.
+   * `pbr` is present when the packs hold texture sets, with the PBR tile size asked for.
+   */
+  readonly textures?: { readonly revision: string; readonly pbr?: { readonly tileSize: number } };
 }
 
 /** Block textures asked for by the host. */
 export type TextureMode = "off" | "on";
+/** Normal maps and materials of packs with texture sets, on textured terrain (default off). */
+export type PbrMode = "off" | "on";
+/**
+ * What PBR does now: `off` as asked or while textures are off, `unavailable` when the packs hold
+ * no texture set, `loading`, `on`, or `failed` when its atlases could not load (textures stay).
+ */
+export type PbrState = "off" | "unavailable" | "loading" | "on" | "failed";
 /** Missing dimensions keep baked block illumination enabled. */
 export type BlockLightSettings = Readonly<Partial<Record<Dimension, boolean>>>;
 /**
@@ -162,6 +172,8 @@ export interface WorldViewerOptions {
   readonly textures?: TextureMode;
   /** Textured leaves and other cut-out blocks (default fast). */
   readonly leaves?: LeafMode;
+  /** Normal maps and materials on textured terrain when the packs have them (default off). */
+  readonly pbr?: PbrMode;
   /** URL prefix of `textures/<revision>/atlas.bin` (default `/textures`). */
   readonly textureBase?: string;
   /**
@@ -186,6 +198,15 @@ export interface TextureSnapshot {
   readonly gpuBytes: number;
   /** Drawn regions with textures. */
   readonly regions: number;
+  readonly pbr: {
+    readonly mode: PbrMode;
+    readonly state: PbrState;
+    /** Tile side of the loaded PBR atlases, smaller than `requestedTileSize` when reduced. */
+    readonly tileSize?: number;
+    readonly requestedTileSize?: number;
+    /** GPU bytes of the normal and material atlases, 0 until they load. */
+    readonly gpuBytes: number;
+  };
 }
 
 export interface ProjectionState {
@@ -286,6 +307,9 @@ export class WorldViewer {
   private projectionFrom = 0;
   private projectionProgress = 1;
   private textureMode: TextureMode = "off";
+  private pbrMode: PbrMode = "off";
+  /** The texture revision whose PBR atlases failed; asked again only when the host asks. */
+  private failedPbrRevision: string | undefined;
   private blockLight: BlockLightSettings = {};
   private blockLightColors: BlockLightSettings = {};
   private blockLightSmooth: BlockLightSettings = {};
@@ -297,11 +321,17 @@ export class WorldViewer {
     | {
         readonly revision: string;
         readonly atlas: BlockAtlas;
+        /** Loaded when PBR was wanted for this set; undefined without or after a failure. */
+        readonly pbr: PbrAtlas | undefined;
+        /** Whether this set was loaded for PBR (`wantsPbr` at the time). */
+        readonly pbrWanted: boolean;
         readonly look: TextureLook;
         readonly materials: SceneMaterials;
       }
     | undefined;
-  private textureLoad: { readonly revision: string; readonly abort: AbortController } | undefined;
+  private textureLoad:
+    | { readonly revision: string; readonly pbr: boolean; readonly abort: AbortController }
+    | undefined;
 
   private constructor(
     container: HTMLElement,
@@ -367,6 +397,7 @@ export class WorldViewer {
     this.streamer = this.createStreamer(world);
     if (options.textureFade !== undefined) this.textureFade = textureFade(options.textureFade);
     this.textureMode = options.textures ?? "off";
+    this.pbrMode = pbrMode(options.pbr ?? "off");
     if (options.leaves !== undefined) this.leafMode = leafMode(options.leaves);
     this.scene.add(this.streamer.root, this.sky, this.sun, this.sun.target, this.selectionBox.root);
     this.scene.add(this.clouds.root);
@@ -532,6 +563,7 @@ export class WorldViewer {
         state: this.textureState,
         gpuBytes: this.textureSet?.atlas.gpuBytes ?? 0,
         regions: this.streamer.stats.textured,
+        pbr: this.pbrSnapshot(),
       },
     };
   }
@@ -756,6 +788,43 @@ export class WorldViewer {
     this.applyTextures();
   }
 
+  /**
+   * Bends textured terrain with the packs' normal maps and gives it their materials (metalness,
+   * roughness, emissive texels), or not. Needs textures on and packs with texture sets.
+   */
+  setPbr(mode: PbrMode): void {
+    this.pbrMode = pbrMode(mode);
+    this.failedPbrRevision = undefined;
+    this.applyTextures();
+  }
+
+  /** Whether the next texture set should come with PBR atlases. */
+  private wantsPbr(revision: string): boolean {
+    return (
+      this.pbrMode === "on" &&
+      this.world.textures?.pbr !== undefined &&
+      this.failedPbrRevision !== revision
+    );
+  }
+
+  private pbrSnapshot(): TextureSnapshot["pbr"] {
+    const requested = this.world.textures?.pbr?.tileSize;
+    const set = this.textureSet;
+    const base = {
+      mode: this.pbrMode,
+      gpuBytes: set?.pbr?.gpuBytes ?? 0,
+      ...(requested === undefined ? {} : { requestedTileSize: requested }),
+      ...(set?.pbr === undefined ? {} : { tileSize: set.pbr.tileSize }),
+    };
+    const revision = this.world.textures?.revision;
+    if (this.pbrMode === "off" || this.textureMode === "off") return { ...base, state: "off" };
+    if (requested === undefined) return { ...base, state: "unavailable" };
+    if (revision !== undefined && this.failedPbrRevision === revision)
+      return { ...base, state: "failed" };
+    if (set?.pbr !== undefined && set.revision === revision) return { ...base, state: "on" };
+    return { ...base, state: this.textureState === "failed" ? "failed" : "loading" };
+  }
+
   /** Draws textured leaves and other cut-out blocks fast or detailed; see `LeafMode`. */
   setLeaves(mode: LeafMode): void {
     this.leafMode = leafMode(mode);
@@ -786,7 +855,8 @@ export class WorldViewer {
       return;
     }
     const set = this.textureSet;
-    if (set?.revision === revision) {
+    const pbr = this.wantsPbr(revision);
+    if (set?.revision === revision && set.pbrWanted === pbr) {
       const cutout = this.leafMode === "detailed";
       this.streamer.setTextures({
         revision,
@@ -798,7 +868,7 @@ export class WorldViewer {
       return;
     }
     this.streamer.setTextures(undefined);
-    if (this.textureLoad?.revision === revision) return;
+    if (this.textureLoad?.revision === revision && this.textureLoad.pbr === pbr) return;
     // A failed atlas is fetched again only when the host asks for textures again.
     if (this.failedTextureRevision === revision) {
       this.setTextureState("failed");
@@ -806,45 +876,66 @@ export class WorldViewer {
     }
     this.textureLoad?.abort.abort();
     const abort = new AbortController();
-    this.textureLoad = { revision, abort };
+    this.textureLoad = { revision, pbr, abort };
     this.setTextureState("loading");
     const base = this.options.textureBase ?? "/textures";
     // While the atlas is missing, the host may have changed stacks: each 404 asks it to check.
-    BlockAtlas.load(`${base}/${revision}/atlas.bin`, abort.signal, () =>
-      this.options.onStaleTextures?.(),
-    ).then(
-      (atlas) => {
-        if (abort.signal.aborted || this.textureLoad?.abort !== abort) {
-          atlas.dispose();
-          return;
+    const stale = () => this.options.onStaleTextures?.();
+    BlockAtlas.load(`${base}/${revision}/atlas.bin`, abort.signal, stale)
+      .then(async (atlas) => {
+        if (!pbr) return { atlas, pbrAtlas: undefined };
+        try {
+          return {
+            atlas,
+            pbrAtlas: await PbrAtlas.load(`${base}/${revision}`, atlas, abort.signal, stale),
+          };
+        } catch (cause) {
+          if (abort.signal.aborted) {
+            atlas.dispose();
+            throw cause;
+          }
+          // Textures keep drawing without PBR; asked again only when the host asks.
+          console.warn(cause);
+          this.failedPbrRevision = revision;
+          return { atlas, pbrAtlas: undefined };
         }
-        this.textureLoad = undefined;
-        this.disposeTextureSet();
-        const look = new TextureLook(atlas);
-        look.setFade(this.textureFade);
-        look.viewHeight.value = this.screenHeight;
-        this.textureSet = {
-          revision,
-          atlas,
-          look,
-          materials: createTexturedMaterials(
-            this.atmosphere,
-            this.materials,
+      })
+      .then(
+        ({ atlas, pbrAtlas }) => {
+          if (abort.signal.aborted || this.textureLoad?.abort !== abort) {
+            atlas.dispose();
+            pbrAtlas?.dispose();
+            return;
+          }
+          this.textureLoad = undefined;
+          this.disposeTextureSet();
+          const look = new TextureLook(atlas, pbrAtlas);
+          look.setFade(this.textureFade);
+          look.viewHeight.value = this.screenHeight;
+          this.textureSet = {
+            revision,
+            atlas,
+            pbr: pbrAtlas,
+            pbrWanted: this.wantsPbr(revision),
             look,
-            this.selectionBox.mask,
-          ),
-        };
-        this.applyTextures();
-      },
-      (cause: unknown) => {
-        if (abort.signal.aborted || this.textureLoad?.abort !== abort) return;
-        this.textureLoad = undefined;
-        this.failedTextureRevision = revision;
-        console.warn(cause);
-        this.setTextureState("failed");
-        this.options.onStaleTextures?.();
-      },
-    );
+            materials: createTexturedMaterials(
+              this.atmosphere,
+              this.materials,
+              look,
+              this.selectionBox.mask,
+            ),
+          };
+          this.applyTextures();
+        },
+        (cause: unknown) => {
+          if (abort.signal.aborted || this.textureLoad?.abort !== abort) return;
+          this.textureLoad = undefined;
+          this.failedTextureRevision = revision;
+          console.warn(cause);
+          this.setTextureState("failed");
+          this.options.onStaleTextures?.();
+        },
+      );
   }
 
   private failedTextureRevision: string | undefined;
@@ -856,6 +947,7 @@ export class WorldViewer {
     // Regions drawn with this atlas leave with it.
     this.streamer.dropTextured();
     set.atlas.dispose();
+    set.pbr?.dispose();
     for (const pair of [set.materials.terrain, set.materials.plants]) {
       pair.steady.dispose();
       pair.fading.dispose();
@@ -1398,5 +1490,10 @@ function textureFade(fade: TextureFade): TextureFade {
 function leafMode(mode: LeafMode): LeafMode {
   if (mode !== "fast" && mode !== "detailed")
     throw new RangeError(`Unknown leaf mode ${String(mode)}`);
+  return mode;
+}
+
+function pbrMode(mode: PbrMode): PbrMode {
+  if (mode !== "off" && mode !== "on") throw new RangeError(`Unknown PBR mode ${String(mode)}`);
   return mode;
 }
