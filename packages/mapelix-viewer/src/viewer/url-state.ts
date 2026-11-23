@@ -8,6 +8,7 @@ import type { MapView } from "../map/tile-math.js";
 import type { MapelixViewer, WorldSettings } from "./mapelix-viewer.js";
 import type { Projection } from "./view-state.js";
 import { renderProfileSettings } from "./render-profile.js";
+import { CAVE_BRIGHTNESS_MAX, CAVE_BRIGHTNESS_MIN } from "../three/cave-brightness.js";
 
 /** Viewer options read back from an address: give them to `new MapelixViewer`. */
 export interface SearchStart {
@@ -28,6 +29,7 @@ const DIMENSIONS: readonly Dimension[] = ["overworld", "nether", "the-end"];
  * The view and settings as address parameters: `dimension`, `x`, `z`, `scale` (CSS pixels per
  * block), `projection`, `view=caves` with `minY` and `thickness`, `ceilingY` (Nether), `hour`,
  * `weather`, `clouds=0`, `profile=low|hd` or individual rendering flags, `autoDepth=0`,
+ * `caveLight` (cave brightness when not 1),
  * `mobile=1`, `mobileRatio=1|1.25`, `markers=0`, the discovery filters and the cave area.
  */
 export function viewerSearch(viewer: MapelixViewer): URLSearchParams {
@@ -71,6 +73,8 @@ export function viewerSearch(viewer: MapelixViewer): URLSearchParams {
   // Apart from LOW/HD: a profile sets textures, but PBR stays the host's choice.
   if (settings.pbr === "on") params.set("pbr", "1");
   if (!settings.autoDepth) params.set("autoDepth", "0");
+  if (settings.caveBrightness !== undefined && settings.caveBrightness !== 1)
+    params.set("caveLight", String(settings.caveBrightness));
   for (const [name, value] of discoveryFilterSearch(settings.discoveries)) params.set(name, value);
   if (settings.selection)
     for (const name of ["minX", "maxX", "minZ", "maxZ"] as const)
@@ -130,6 +134,13 @@ export function startFromSearch(params: URLSearchParams): SearchStart {
   if (profile === "low" || profile === "hd")
     Object.assign(settings, renderProfileSettings(profile), { renderProfile: profile });
   if (params.get("autoDepth") === "0") settings.autoDepth = false;
+  const caveLight = number(params, "caveLight");
+  if (
+    caveLight !== undefined &&
+    caveLight >= CAVE_BRIGHTNESS_MIN &&
+    caveLight <= CAVE_BRIGHTNESS_MAX
+  )
+    settings.caveBrightness = caveLight;
   try {
     const filters = discoveryFiltersFromSearch(params);
     if (filters) settings.discoveries = filters;

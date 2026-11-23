@@ -34,6 +34,14 @@ selection tool and restores a distance of 80 and pitch of 60 degrees around the
 current slice midpoint. X/Z, heading, selection and discovery preferences remain.
 Explicit camera placement drains old control damping before applying the pose.
 
+## Cave light
+
+The caves view has no clock: a fixed fill light shines from the camera, slightly above and to
+the left, so walls facing the view are brightest and relief shows. Block light (torches, lava,
+glowing blocks) adds to it. `setCaveBrightness(0..1.5)` scales the fill (1 by default); 0
+leaves only block light and glowing texels, as at night. The settings panel shows it as a
+"Cave light" slider and the address keeps `caveLight` when it is not 1.
+
 ## Automatic following and limits
 
 The host opts into automatic depth with a metadata loader. It is disabled by

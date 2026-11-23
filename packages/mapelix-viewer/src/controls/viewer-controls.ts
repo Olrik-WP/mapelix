@@ -685,10 +685,31 @@ export class ViewerControls {
     thicknessField.append(document.createTextNode(t.sliceThickness), thickness);
     const auto = this.check(t.followDepth, (on) => viewer.setAutoDepth(on));
     auto.dataset.part = "auto-depth";
+    const brightnessText = t.caveBrightness ?? ((percent: number) => `Cave light ${percent}%`);
+    const brightness = make("div", "mx-field");
+    brightness.dataset.part = "cave-brightness";
+    const brightnessLabel = make("label");
+    const brightnessInput = make("input");
+    brightnessInput.type = "range";
+    brightnessInput.min = "0";
+    brightnessInput.max = "150";
+    brightnessInput.step = "10";
+    brightnessInput.addEventListener("input", () => {
+      brightnessLabel.textContent = brightnessText(Number(brightnessInput.value));
+      viewer.setCaveBrightness(Number(brightnessInput.value) / 100);
+    });
+    brightness.append(brightnessLabel, brightnessInput);
     const navigationNote = make("p");
     navigationNote.dataset.part = "navigation";
     navigationNote.setAttribute("role", "status");
-    caves.append(thicknessField, depthField, wrapperOf(auto), navigationNote, this.areaControls());
+    caves.append(
+      thicknessField,
+      depthField,
+      brightness,
+      wrapperOf(auto),
+      navigationNote,
+      this.areaControls(),
+    );
     const ceiling = make("div", "mx-field");
     ceiling.dataset.part = "ceiling";
     const ceilingLabel = make("label");
@@ -1116,6 +1137,15 @@ export class ViewerControls {
       }
       const thickness = this.panelBody.querySelector<HTMLSelectElement>("[data-part=caves] select");
       if (thickness) thickness.value = String(settings.caveThickness);
+      const brightness = this.part("cave-brightness");
+      const brightnessInput = brightness?.querySelector("input");
+      if (brightness && brightnessInput && document.activeElement !== brightnessInput) {
+        const percent = Math.round((settings.caveBrightness ?? 1) * 100);
+        const label = (t.caveBrightness ?? ((p: number) => `Cave light ${p}%`))(percent);
+        brightnessInput.value = String(percent);
+        brightness.querySelector("label")!.textContent = label;
+        brightnessInput.setAttribute("aria-label", label);
+      }
       const ceiling = this.part("ceiling");
       const ceilingInput = ceiling?.querySelector("input");
       if (ceilingInput && document.activeElement !== ceilingInput) {

@@ -85,6 +85,18 @@ it("round-trips LOW/HD without independent geometry flags or changes to sky and 
     expect(startFromSearch(search).settings.pbr).toBe("on");
   }
   expect(startFromSearch(new URLSearchParams("pbr=2")).settings.pbr).toBeUndefined();
+  // Cave brightness round-trips apart from its default and stays in range.
+  const dim = {
+    settings: { ...DEFAULT_WORLD_SETTINGS, caveBrightness: 0.4 },
+    view: { dimension: "overworld", x: 0, z: 0, pixelsPerBlock: 12, projection: "isometric" },
+  } as unknown as MapelixViewer;
+  expect(startFromSearch(viewerSearch(dim)).settings.caveBrightness).toBe(0.4);
+  expect(
+    viewerSearch({ ...dim, settings: DEFAULT_WORLD_SETTINGS } as MapelixViewer).has("caveLight"),
+  ).toBe(false);
+  expect(
+    startFromSearch(new URLSearchParams("caveLight=3")).settings.caveBrightness,
+  ).toBeUndefined();
   expect(
     startFromSearch(new URLSearchParams("profile=low&textures=1&blockLightColors=nether")).settings,
   ).toMatchObject(renderProfileSettings("low"));

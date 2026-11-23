@@ -9,8 +9,15 @@ describe("dimension atmosphere", () => {
     const light = atmosphere.setTimeOfDay(12);
     expect(atmosphere.setTimeOfDay(0)).toEqual(light);
     expect(atmosphere.caveLight.value).toBeGreaterThan(0);
+    const full = atmosphere.caveLight.value;
+    atmosphere.setCaveBrightness(0.5);
+    expect(atmosphere.caveLight.value).toBeCloseTo(full / 2);
+    expect(() => atmosphere.setCaveBrightness(2)).toThrow(RangeError);
     atmosphere.setCaves(false);
     expect(atmosphere.caveLight.value).toBe(0);
+    atmosphere.setCaves(true);
+    expect(atmosphere.caveLight.value).toBeCloseTo(full / 2);
+    atmosphere.setCaves(false);
     expect(atmosphere.setTimeOfDay(15.5)).toEqual(baseline);
   });
   it("keeps Nether and End lighting fixed across the clock", () => {

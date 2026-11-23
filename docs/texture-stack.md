@@ -291,7 +291,13 @@ address keeps `pbr=1`. It needs textures on and applies wherever textures do.
   turning into a mirror or a highlight on every texel.
 - Roughness rises where the normal turns faster than the screen's pixels can show (specular
   anti-aliasing, as in Filament), so bumpy terrain does not sparkle in the distance.
-- Emissive texels are added after lighting, stronger at night, and do not light other blocks.
+- Emissive texels are added after lighting, stronger at night and underground, so glowing ores
+  and blocks stand out in caves; they do not light other blocks.
+- Block light follows the relief: its direction is taken from the slope of the light level
+  across the face (smooth light) or from the face itself, so torches bring out the grooves of
+  nearby blocks.
+- Under the open sky, glossy texels reflect the sky's color with a Fresnel term, weaker as
+  roughness grows and held back by ambient occlusion; caves, the Nether and the End do not.
 - Plants, water, lava, glass, clouds and rain keep their own materials.
 
 ### Measurements

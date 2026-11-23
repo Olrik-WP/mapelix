@@ -64,6 +64,8 @@ export interface ControlTexts {
   readonly detailedLeaves: string;
   /** Optional for hosts with their own texts; English otherwise. */
   readonly pbrMaterials?: string;
+  /** Label of the cave brightness slider, in percent. */
+  readonly caveBrightness?: (percent: number) => string;
   readonly texturesFailed: string;
   readonly rain: string;
   readonly thunderstorm: string;
@@ -160,6 +162,7 @@ export const DEFAULT_CONTROL_TEXTS: ControlTexts = {
   texturesUnavailable: "This world has no block textures.",
   detailedLeaves: "Detailed leaves",
   pbrMaterials: "PBR materials",
+  caveBrightness: (percent) => `Cave light ${percent}%`,
   texturesFailed: "Block textures could not load; blocks keep their colors.",
   rain: "Rain",
   thunderstorm: "Thunderstorm",

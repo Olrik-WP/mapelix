@@ -31,6 +31,7 @@ import type { AutoPerspective } from "../three/view-projection.js";
 import type { WeatherMode } from "../three/weather-layer.js";
 import { renderProfileSettings, type RenderProfile } from "./render-profile.js";
 import { mobilePixelRatio, type MobilePixelRatio } from "../three/render-quality.js";
+import { caveBrightness } from "../three/cave-brightness.js";
 import type {
   BlockLightSettings,
   LeafMode,
@@ -132,6 +133,8 @@ export interface WorldSettings {
   readonly pbr?: PbrMode;
   /** Cave slices follow the camera depth. */
   readonly autoDepth: boolean;
+  /** Fill light of the cave view, 0 to 1.5 (default 1); lower shows torches and glowing ores. */
+  readonly caveBrightness?: number;
   readonly discoveries: DiscoveryFilters;
   /** Cave exploration area. */
   readonly selection: HorizontalSelection | undefined;
@@ -157,6 +160,7 @@ export const DEFAULT_WORLD_SETTINGS: WorldSettings = {
   leaves: "fast",
   pbr: "off",
   autoDepth: true,
+  caveBrightness: 1,
   discoveries: DEFAULT_DISCOVERY_FILTERS,
   selection: undefined,
   selectionTool: "off",
@@ -573,6 +577,16 @@ export class MapelixViewer {
   setAutoDepth(enabled: boolean): void {
     this.updateSettings({ autoDepth: enabled });
     if (!this.changing) this.worldViewer?.setAutoDepth(enabled);
+  }
+
+  /**
+   * Fill light of the cave view, from 0 (only torches and glowing blocks) to 1.5; 1 by default.
+   * Lower shows block light and glowing ores as they would look at night.
+   */
+  setCaveBrightness(brightness: number): void {
+    caveBrightness(brightness);
+    this.updateSettings({ caveBrightness: brightness });
+    this.worldViewer?.setCaveBrightness(brightness);
   }
 
   /** Held vertical movement in caves: 1 up, −1 down, 0 stop. */
@@ -1216,6 +1230,7 @@ export class MapelixViewer {
           onTextureState: () => this.publish(),
           onStaleTextures: () => this.checkTextures(),
           autoDepth: this.settingsNow.autoDepth,
+          caveBrightness: this.settingsNow.caveBrightness ?? 1,
           discoveryFilters: this.settingsNow.discoveries,
           ...(this.settingsNow.selection ? { selection: this.settingsNow.selection } : {}),
           // The host draws the discovery card where its controls leave room.

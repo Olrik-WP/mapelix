@@ -16,8 +16,10 @@ import {
   cameraFar,
   cameraNear,
   cameraPosition,
+  cameraWorldMatrix,
   cameraProjectionMatrixInverse,
   color,
+  cross,
   dFdx,
   dFdy,
   dot,
@@ -50,6 +52,7 @@ import {
   uniform,
   vec2,
   vec3,
+  vec4,
   viewportDepthTexture,
   viewportSharedTexture,
 } from "three/tsl";
@@ -236,34 +239,133 @@ function createTerrainMaterial(
       : mix(mer.z, mer.z.mul(0.5).max(PBR_WET_ROUGHNESS), wet);
   material.roughnessNode = roughness;
   material.aoNode = quadOcclusion;
+  let bent: Node<"vec3"> | undefined;
+  let filtered: Node<"float"> | undefined;
   if (look !== undefined && pbr !== undefined && mer !== undefined) {
     // Water fills the grooves: wet ground loses part of its relief, so it does not shine with
     // a highlight on every texel.
-    const bent = normalize(mix(look.pbrNormal(pbr), normalWorldGeometry, wet.mul(PBR_WET_FLATTEN)));
+    bent = normalize(mix(look.pbrNormal(pbr), normalWorldGeometry, wet.mul(PBR_WET_FLATTEN)));
+    filtered = filteredRoughness(bent, roughness);
     material.normalNode = transformNormalToView(bent);
-    material.roughnessNode = filteredRoughness(bent, roughness);
-    // Without reflections of the scene, fully metallic texels would turn black: they keep
-    // some of their diffuse color.
+    material.roughnessNode = filtered;
+    // Sky reflections stand in for the scene's: fully metallic texels would still turn too
+    // dark, so they keep some of their diffuse color.
     material.metalnessNode = mer.x.mul(PBR_METALNESS);
   }
   // Lamps glow harder at night, bright enough for the bloom pass to pick them up.
   const glow = mix(float(4.2), float(1.4), atmosphere.daylight);
+  // Block light has no direction of its own: with a normal map it is guessed from the face.
+  const torch = bent === undefined ? float(1) : torchShading(bent);
   const emissive = select(
     glowing,
     (look === undefined ? quadColor : look.terrain(quadColor)).mul(glow),
     // Local fill follows sky occlusion; emissive output otherwise bypasses material.aoNode.
+    // Block light adds to the cave view's lamp, so torches show as far as they reach; the sum
+    // stops short of burning the texture out next to the flame.
     material.colorNode.mul(
-      max(vec3(atmosphere.caveLight), blockLight(atmosphere).mul(quadOcclusion)),
+      vec3(atmosphere.caveLight)
+        .mul(caveHeadlamp(bent))
+        .add(blockLight(atmosphere).mul(quadOcclusion).mul(torch))
+        .min(vec3(LOCAL_LIGHT_MAX)),
     ),
   );
-  // Emissive texels (ores, lamps) keep their own color in the dark; they light nothing else.
-  material.emissiveNode =
-    mer === undefined
-      ? emissive
-      : emissive.add(
-          material.colorNode.mul(mer.y).mul(mix(float(2.4), float(1), atmosphere.daylight)),
-        );
+  if (mer === undefined || bent === undefined || filtered === undefined) {
+    material.emissiveNode = emissive;
+    return material;
+  }
+  // Emissive texels (ores, lamps) keep their own color; in the dark, under ground and in other
+  // dimensions they glow like lamps, bright enough to bloom. They light nothing else.
+  const surfaceDay = atmosphere.daylight.mul(select(atmosphere.environment.equal(0), 1, 0));
+  const texelGlow = material.colorNode.mul(mer.y).mul(mix(float(4.2), float(1), surfaceDay));
+  material.emissiveNode = emissive
+    .add(texelGlow)
+    .add(skyReflection(atmosphere, bent, filtered, material.colorNode, mer.x));
   return material;
+}
+
+/**
+ * The cave view's fill comes from the camera, like a miner's lamp: faces and bumps turned
+ * toward the lamp catch it, the others fall darker, and corners keep their contact shade, so
+ * caves keep their volumes and textured blocks their relief. The lamp sits above and left of
+ * the eye: a light on the line of sight would flatten every bump, like a camera flash. With a
+ * normal map, each bump takes more or less of the face's light, as with block light.
+ */
+function caveHeadlamp(bent: Node<"vec3"> | undefined): Node<"float"> {
+  const toCamera = normalize(cameraPosition.sub(positionWorld));
+  const up = cameraWorldMatrix.mul(vec4(0, 1, 0, 0)).xyz;
+  const right = cameraWorldMatrix.mul(vec4(1, 0, 0, 0)).xyz;
+  const lamp = normalize(toCamera.add(up.mul(HEADLAMP_RAISE)).sub(right.mul(HEADLAMP_LEFT)));
+  const facing = max(dot(normalWorldGeometry, lamp), 0);
+  const face = mix(float(HEADLAMP_SIDE), float(HEADLAMP_FRONT), facing).mul(
+    mix(float(0.65), float(1), quadOcclusion),
+  );
+  if (bent === undefined) return face;
+  return face.mul(reliefShading(bent, lamp));
+}
+
+/**
+ * Where block light seems to come from, in world space: out of the face, tilted toward its
+ * brighter corners when light is smooth across faces.
+ */
+const torchDirection = Fn((builder) => {
+  const n = normalWorldGeometry;
+  if (!builder.geometry.hasAttribute("smoothLight")) return n;
+  // The light level's slope along the face, from its change across neighboring pixels.
+  const level = quadSmoothLight.w;
+  const dx = dFdx(positionCell);
+  const dy = dFdy(positionCell);
+  const acrossY = cross(dy, n);
+  const acrossX = cross(n, dx);
+  const det = dot(dx, acrossY);
+  const safe = select(abs(det).greaterThan(1e-9), det, float(1));
+  const slope = acrossY
+    .mul(dFdx(level))
+    .add(acrossX.mul(dFdy(level)))
+    .div(safe);
+  return normalize(n.add(slope.mul(TORCH_TILT)));
+});
+
+/**
+ * How much more or less block light the bent normal takes than the flat face: bumps facing the
+ * light brighten, the others darken, and flat texels keep the face's light.
+ */
+function torchShading(bent: Node<"vec3">): Node<"float"> {
+  return reliefShading(bent, torchDirection());
+}
+
+/** A bump's share of a light against the flat face's: above 1 facing it, below 1 turned away. */
+function reliefShading(bent: Node<"vec3">, light: Node<"vec3">): Node<"float"> {
+  return max(dot(bent, light), 0)
+    .div(max(dot(normalWorldGeometry, light), 0.25))
+    .min(TORCH_SHADING_MAX);
+}
+
+/**
+ * The sky mirrored by glossy and metallic texels, open sky only: Schlick's Fresnel from the
+ * texel's reflectance, fading with roughness, read toward the normal as roughness blurs it.
+ */
+function skyReflection(
+  atmosphere: Atmosphere,
+  normal: Node<"vec3">,
+  roughness: Node<"float">,
+  albedo: Node<"vec3">,
+  metalness: Node<"float">,
+): Node<"vec3"> {
+  const toCamera = normalize(cameraPosition.sub(positionWorld));
+  const reflected = normalize(
+    mix(reflect(toCamera.negate(), normal), normal, roughness.mul(roughness)),
+  );
+  const sky = atmosphere
+    .sky(normalize(vec3(reflected.x, max(reflected.y, 0.02), reflected.z)))
+    .min(vec3(PBR_SKY_MAX));
+  const f0 = mix(vec3(0.04), albedo, metalness.mul(PBR_METALNESS));
+  const facing = float(1)
+    .sub(max(dot(normal, toCamera), 0))
+    .pow(5);
+  const fresnel = f0.add(vec3(1).sub(f0).mul(facing));
+  const gloss = float(1).sub(roughness).pow(2);
+  const open = select(atmosphere.environment.equal(0), quadOcclusion, float(0));
+  return sky.mul(fresnel).mul(gloss.mul(open));
 }
 
 /** Share of a texel's metalness the terrain shows, see `createTerrainMaterial`. */
@@ -272,6 +374,20 @@ const PBR_METALNESS = 0.6;
 const PBR_WET_FLATTEN = 0.6;
 /** Lowest roughness rain gives a pack's material. */
 const PBR_WET_ROUGHNESS = 0.42;
+/** How far block light leans toward brighter corners, per light level of slope per block. */
+const TORCH_TILT = 12;
+/** Most a bump facing block light brightens, against the flat face. */
+const TORCH_SHADING_MAX = 1.6;
+/** Brightest local light (cave lamp and block light together) a surface takes. */
+const LOCAL_LIGHT_MAX = 2;
+/** Cave fill on faces seen edge-on and head-on, see `caveHeadlamp`. */
+const HEADLAMP_SIDE = 0.3;
+const HEADLAMP_FRONT = 1;
+/** Where the lamp sits off the line of sight, in view units: up, and to the left. */
+const HEADLAMP_RAISE = 0.7;
+const HEADLAMP_LEFT = 0.4;
+/** Brightest sky a texel mirrors, so the sun disc does not flare on every glossy texel. */
+const PBR_SKY_MAX = 1.5;
 /** Scale and cap of the roughness added by `filteredRoughness` (Filament's defaults). */
 const SPECULAR_AA_VARIANCE = 0.15;
 const SPECULAR_AA_THRESHOLD = 0.2;

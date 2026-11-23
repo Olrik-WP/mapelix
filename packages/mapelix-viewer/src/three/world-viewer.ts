@@ -146,6 +146,8 @@ export interface WorldViewerOptions {
   /** Emitted after automatic depth or discovery navigation changes context. */
   readonly onDepthChange?: (context: SceneContext) => void;
   readonly autoDepth?: boolean;
+  /** Scale of the cave view's fill, see `setCaveBrightness` (default 1). */
+  readonly caveBrightness?: number;
   /** Minimum time between automatic slice requests, at least 1000 ms (default 2000). */
   readonly autoDepthIntervalMs?: number;
   readonly regionBase?: string;
@@ -367,6 +369,8 @@ export class WorldViewer {
       options.autoDepthIntervalMs,
     );
     this.atmosphere.setDimension(world.dimension);
+    if (options.caveBrightness !== undefined)
+      this.atmosphere.setCaveBrightness(options.caveBrightness);
     this.atmosphere.setCaves(this.context.mode === "caves");
     this.clouds = new CloudLayer(this.atmosphere, options.clouds);
     this.clouds.setContext(this.context);
@@ -1014,6 +1018,14 @@ export class WorldViewer {
 
   setAutoDepth(enabled: boolean): void {
     this.depthFollow.setEnabled(enabled);
+  }
+
+  /**
+   * Scales the cave view's fill light, from 0 to 1.5: 1 by default, lower lets torches and
+   * glowing blocks stand out as they would at night.
+   */
+  setCaveBrightness(brightness: number): void {
+    this.atmosphere.setCaveBrightness(brightness);
   }
 
   /** Return above the current cut, retaining X/Z, discoveries and selection. */
