@@ -69,6 +69,8 @@ export interface SceneAtlas {
 export interface SceneTextureOptions {
   readonly maxTileSize: number;
   readonly budgetBytes: number;
+  /** Largest atlas side, 2048 (default) or 4096. */
+  readonly maxAtlasSide?: number;
   /** The PBR atlases' tile size and budget; used only by stacks with texture sets. */
   readonly pbr?: { readonly tileSize: number; readonly budgetBytes: number };
   readonly limits?: Partial<PackLimits>;
@@ -82,6 +84,7 @@ function atlasSettings(
   return {
     maxTileSize: options.maxTileSize,
     budgetBytes: options.budgetBytes,
+    ...(options.maxAtlasSide === undefined ? {} : { maxAtlasSide: options.maxAtlasSide }),
     ...(options.pbr !== undefined && stack.hasTextureSets ? { pbr: options.pbr } : {}),
   };
 }
@@ -437,6 +440,7 @@ export async function validateTextureStack(
   const settings: SceneTextureOptions = {
     maxTileSize: options.maxTileSize ?? 32,
     budgetBytes: options.budgetBytes ?? 32 * 1024 * 1024,
+    ...(options.maxAtlasSide === undefined ? {} : { maxAtlasSide: options.maxAtlasSide }),
     pbr: options.pbr ?? { tileSize: 32, budgetBytes: 48 * 1024 * 1024 },
   };
   try {

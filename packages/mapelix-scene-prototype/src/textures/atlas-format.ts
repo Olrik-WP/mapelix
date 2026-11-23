@@ -27,6 +27,11 @@ export const ATLAS_TILE_INFO_BYTES = 8;
  * is at least 2048; WebGPU guarantees 8192). Larger packs get smaller tiles.
  */
 export const MAX_ATLAS_SIDE = 2048;
+/**
+ * Largest side of an atlas built with `maxAtlasSide: 4096`, for desktop GPUs. A viewer that
+ * cannot or should not sample it drops the first mipmap levels (see `fitAtlasSide`).
+ */
+export const LARGE_ATLAS_SIDE = 4096;
 /** Smallest tile side; the last mipmap level holds tiles this size. */
 export const MIN_ATLAS_TILE = 4;
 /** Tiles a quad texture word can address. */
@@ -106,7 +111,12 @@ function checkShape(tileSize: number, columns: number, rows: number, tiles: numb
     throw new RangeError(`Atlas tile size ${tileSize} is not a power of two from 4 to 256`);
   }
   const cell = atlasCellSize(tileSize);
-  if (columns < 1 || rows < 1 || columns * cell > MAX_ATLAS_SIDE || rows * cell > MAX_ATLAS_SIDE) {
+  if (
+    columns < 1 ||
+    rows < 1 ||
+    columns * cell > LARGE_ATLAS_SIDE ||
+    rows * cell > LARGE_ATLAS_SIDE
+  ) {
     throw new RangeError(`Atlas of ${columns} by ${rows} tiles of ${tileSize} is too large`);
   }
   if (tiles < 1 || tiles > columns * rows || tiles > MAX_ATLAS_TILES) {
@@ -147,6 +157,29 @@ export function encodeTextureAtlas(atlas: TextureAtlas): Uint8Array {
     offset += pixels.byteLength;
   }
   return bytes;
+}
+
+/**
+ * The atlas without its first `level` mipmap levels: the same cells and tiles, the tile size
+ * halved for each level dropped, viewing the same bytes. It is close to the atlas a smaller tile
+ * size would build, as each level averages the one above.
+ */
+export function atlasFromLevel(atlas: TextureAtlas, level: number): TextureAtlas {
+  if (!Number.isInteger(level) || level < 0 || level >= atlas.levels.length)
+    throw new RangeError(`Atlas has no level ${level}`);
+  if (level === 0) return atlas;
+  return { ...atlas, tileSize: atlas.tileSize >> level, levels: atlas.levels.slice(level) };
+}
+
+/** The atlas without as many first levels as it takes for both sides to fit `maxSide`. */
+export function fitAtlasSide(atlas: TextureAtlas, maxSide: number): TextureAtlas {
+  let level = 0;
+  while (level < atlas.levels.length - 1) {
+    const { width, height } = atlasLevelSize(atlas, level);
+    if (Math.max(width, height) <= maxSide) break;
+    level++;
+  }
+  return atlasFromLevel(atlas, level);
 }
 
 /** Parses an atlas; the level arrays view the input bytes without copying. */

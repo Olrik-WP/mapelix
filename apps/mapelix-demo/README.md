@@ -78,6 +78,12 @@ node apps/mapelix-demo/build/index.js
 highest priority first. `MAPELIX_TEXTURE_STACK` names a stack folder with its
 `mapelix-stack.json` instead. Either one wins over the stack chosen on the page.
 
+Atlas sizes follow the server's texture options (see `docs/texture-stack.md`):
+`MAPELIX_TEXTURE_TILE_SIZE`, `MAPELIX_TEXTURE_BUDGET_MIB`, `MAPELIX_TEXTURE_ATLAS_SIDE`,
+`MAPELIX_PBR_TILE_SIZE` and `MAPELIX_PBR_BUDGET_MIB`. For a 64-pixel pack on desktop:
+`MAPELIX_TEXTURE_TILE_SIZE=64 MAPELIX_TEXTURE_ATLAS_SIDE=4096 MAPELIX_TEXTURE_BUDGET_MIB=96`
+`MAPELIX_PBR_TILE_SIZE=64 MAPELIX_PBR_BUDGET_MIB=192`; mobile mode loads them at half size.
+
 ### Choosing packs on a page
 
 ```sh

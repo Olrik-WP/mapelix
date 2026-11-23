@@ -8,11 +8,14 @@ import { encodePng } from "@mapelix/prototype/png";
 import { makePng, makeZip, packFiles } from "../../test/synthetic-pack.js";
 import {
   ATLAS_HEADER_BYTES,
+  LARGE_ATLAS_SIDE,
   MAX_ATLAS_SIDE,
   atlasCellSize,
+  atlasFromLevel,
   atlasLevelSize,
   decodeTextureAtlas,
   encodeTextureAtlas,
+  fitAtlasSide,
   packQuadTexture,
   unpackQuadTexture,
 } from "./atlas-format.js";
@@ -292,7 +295,31 @@ describe("texture atlas", () => {
     // 23 columns of 96-pixel cells would be 2208 pixels wide; 48-pixel cells fit in 2048.
     expect(built.atlas.tileSize).toBe(32);
     expect(built.atlas.columns * 48).toBeLessThanOrEqual(MAX_ATLAS_SIDE);
-  });
+
+    // A 4096 side keeps the 64-texel tiles, under its own revision; the default keeps its own.
+    const large = await buildTextureAtlas(await openResourcePackStack([path]), {
+      maxTileSize: 64,
+      budgetBytes: 64 * 1024 * 1024,
+      maxAtlasSide: LARGE_ATLAS_SIDE,
+    });
+    expect(large.atlas.tileSize).toBe(64);
+    expect(large.atlas.columns * 96).toBeGreaterThan(MAX_ATLAS_SIDE);
+    expect(large.fingerprint).not.toBe(built.fingerprint);
+    const decoded = decodeTextureAtlas(encodeTextureAtlas(large.atlas));
+    expect(decoded.tileSize).toBe(64);
+    // A viewer limited to 2048 drops the first level: the tiles of a 32-texel atlas, same cells.
+    const fitted = fitAtlasSide(decoded, MAX_ATLAS_SIDE);
+    expect(fitted.tileSize).toBe(32);
+    expect(fitted.levels).toEqual(decoded.levels.slice(1));
+    expect(atlasLevelSize(fitted, 0)).toEqual(atlasLevelSize(decoded, 1));
+    expect(fitted.tiles).toBe(decoded.tiles);
+    expect(fitAtlasSide(decoded, LARGE_ATLAS_SIDE)).toBe(decoded);
+    expect(atlasFromLevel(decoded, 4).tileSize).toBe(4);
+    expect(() => atlasFromLevel(decoded, 5)).toThrow(RangeError);
+    await expect(
+      buildTextureAtlas(await openResourcePackStack([path]), { maxAtlasSide: 3000 }),
+    ).rejects.toThrow(/2048 or 4096/);
+  }, 30_000);
 
   it("keeps the colors under an overlay mask, whose alpha is not transparency", async () => {
     // Like a grass block side: a gray strip that takes the biome color (alpha 255) above soil

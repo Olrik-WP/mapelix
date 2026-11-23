@@ -34,13 +34,35 @@ const packDirectory =
 const textureStack = process.env.MAPELIX_TEXTURE_STACK;
 const texturePacks = process.env.MAPELIX_TEXTURE_PACKS?.split(delimiter).filter((path) => path);
 const storedPacks = managed ? storedTextureStack(packDirectory) : [];
+/**
+ * Atlas sizes, when set: `MAPELIX_TEXTURE_TILE_SIZE`, `MAPELIX_TEXTURE_BUDGET_MIB`,
+ * `MAPELIX_TEXTURE_ATLAS_SIDE` (2048 or 4096), `MAPELIX_PBR_TILE_SIZE`, `MAPELIX_PBR_BUDGET_MIB`.
+ */
+const atlasSizes = Object.fromEntries(
+  (
+    [
+      ["MAPELIX_TEXTURE_TILE_SIZE", "maxTileSize"],
+      ["MAPELIX_TEXTURE_BUDGET_MIB", "budgetMiB"],
+      ["MAPELIX_TEXTURE_ATLAS_SIDE", "maxAtlasSide"],
+      ["MAPELIX_PBR_TILE_SIZE", "pbrTileSize"],
+      ["MAPELIX_PBR_BUDGET_MIB", "pbrBudgetMiB"],
+    ] as const
+  ).flatMap(([name, option]) =>
+    process.env[name] === undefined ? [] : [[option, positive(name, 1)]],
+  ),
+);
 const textures =
   textureStack !== undefined && textureStack !== ""
-    ? { textures: { stack: textureStack } }
+    ? { textures: { stack: textureStack, ...atlasSizes } }
     : texturePacks !== undefined && texturePacks.length > 0
-      ? { textures: { packs: texturePacks } }
+      ? { textures: { packs: texturePacks, ...atlasSizes } }
       : storedPacks.length > 0
-        ? { textures: { packs: storedPacks.map((entry) => join(packDirectory, entry.file)) } }
+        ? {
+            textures: {
+              packs: storedPacks.map((entry) => join(packDirectory, entry.file)),
+              ...atlasSizes,
+            },
+          }
         : {};
 
 /** True when a world folder is configured: the map then turns into the 3D world when zoomed in. */

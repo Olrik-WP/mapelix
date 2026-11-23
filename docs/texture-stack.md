@@ -16,13 +16,14 @@ createSceneServer({
 });
 ```
 
-| Option        | Default   | Meaning                                                          |
-| ------------- | --------- | ---------------------------------------------------------------- |
-| `stack`       |           | A read-only folder holding the packs and `mapelix-stack.json`.   |
-| `packs`       |           | Pack folders, `.zip` or `.mcpack` files, highest priority first. |
-| `maxTileSize` | 32        | Largest tile side, a power of two from 4 to 256.                 |
-| `budgetMiB`   | 32        | GPU memory the atlas may take with its mipmaps.                  |
-| `limits`      | see below | Bounds on reading the packs.                                     |
+| Option         | Default   | Meaning                                                          |
+| -------------- | --------- | ---------------------------------------------------------------- |
+| `stack`        |           | A read-only folder holding the packs and `mapelix-stack.json`.   |
+| `packs`        |           | Pack folders, `.zip` or `.mcpack` files, highest priority first. |
+| `maxTileSize`  | 32        | Largest tile side, a power of two from 4 to 256.                 |
+| `budgetMiB`    | 32        | GPU memory the atlas may take with its mipmaps.                  |
+| `maxAtlasSide` | 2048      | Largest atlas side, 2048 or 4096 (see "High-resolution packs").  |
+| `limits`       | see below | Bounds on reading the packs.                                     |
 
 The server reads no environment variable. A stack that cannot be read is logged
 (`textures.failed`), shown in `stats().textures.error`, and the world is served untextured.
@@ -340,6 +341,18 @@ with `{ "ok": false, "errors": [...] }` when the stack cannot be used.
 A high-resolution pack gets the tile size the atlas side and budget allow: with the defaults,
 a full stack of about 2,000 textures fits at 16 pixels; a larger `budgetMiB` does not raise
 it past the 2048-pixel atlas side.
+
+### High-resolution packs
+
+`maxAtlasSide: 4096` lets the atlases grow to 4096 pixels, so a full stack of 64-pixel
+textures keeps its detail: about 1,700 tiles of 64 texels fit, with `maxTileSize: 64`,
+`pbrTileSize: 64` and budgets to match (`budgetMiB` 96, `pbrBudgetMiB` 192). It counts in the
+texture revision only at 4096, so stacks built before keep their revision.
+
+With 1,716 textures, each atlas takes 80.6 MiB of GPU memory, 242 MiB for all three. The
+viewer loads an atlas without its first mipmap level, at half the tile size and a quarter of
+the memory, in mobile mode and on devices that cannot sample 4096 pixels: the files stay the
+same, and switching mobile mode reloads the atlases. Downloads are not smaller.
 
 To find the blocks a stack leaves with plain colors, build `@mapelix/scene-prototype` and run
 its coverage script from that package. Without `--world` it checks every known block; with it,

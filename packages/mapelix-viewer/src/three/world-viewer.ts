@@ -57,7 +57,7 @@ import {
   type SceneMaterials,
 } from "./shaders/materials";
 import { DEFAULT_TEXTURE_FADE, TextureLook, type TextureFade } from "./shaders/textured";
-import { BlockAtlas, PbrAtlas } from "./block-atlas";
+import { atlasMaxSide, BlockAtlas, PbrAtlas } from "./block-atlas";
 import {
   mobilePixelRatio,
   mobileViewDistance,
@@ -243,6 +243,8 @@ export interface Pointed {
 }
 
 const SHADOW_MAP_SIZE = 4096;
+/** Half the width of the sun's shadow map when zoomed in closest, in blocks. */
+const MIN_SHADOW_EXTENT = 32;
 /** Half the width of the sun's shadow map when zoomed far out, in blocks. */
 const MAX_SHADOW_EXTENT = 2048;
 /** Farthest the view grows on its own as the camera zooms out, in blocks. */
@@ -338,12 +340,19 @@ export class WorldViewer {
         readonly pbr: PbrAtlas | undefined;
         /** Whether this set was loaded for PBR (`wantsPbr` at the time). */
         readonly pbrWanted: boolean;
+        /** Largest atlas side it was loaded for, see `atlasMaxSide`. */
+        readonly maxSide: number;
         readonly look: TextureLook;
         readonly materials: SceneMaterials;
       }
     | undefined;
   private textureLoad:
-    | { readonly revision: string; readonly pbr: boolean; readonly abort: AbortController }
+    | {
+        readonly revision: string;
+        readonly pbr: boolean;
+        readonly maxSide: number;
+        readonly abort: AbortController;
+      }
     | undefined;
 
   private constructor(
@@ -921,7 +930,13 @@ export class WorldViewer {
     }
     const set = this.textureSet;
     const pbr = this.wantsPbr(revision);
-    if (set?.revision === revision && set.pbrWanted === pbr) {
+    const maxSide = atlasMaxSide(this.renderer.backend, this.mobileMode);
+    // Another side limit gives the same textures when both hold the atlases whole.
+    const fullSide = Math.max(set?.atlas.fullSide ?? 0, set?.pbr?.fullSide ?? 0);
+    const sameSide =
+      set !== undefined &&
+      (set.maxSide === maxSide || (fullSide <= set.maxSide && fullSide <= maxSide));
+    if (set?.revision === revision && set.pbrWanted === pbr && sameSide) {
       const cutout = this.leafMode === "detailed";
       this.setStreamedTextures({
         revision,
@@ -933,7 +948,12 @@ export class WorldViewer {
       return;
     }
     this.setStreamedTextures(undefined);
-    if (this.textureLoad?.revision === revision && this.textureLoad.pbr === pbr) return;
+    if (
+      this.textureLoad?.revision === revision &&
+      this.textureLoad.pbr === pbr &&
+      this.textureLoad.maxSide === maxSide
+    )
+      return;
     // A failed atlas is fetched again only when the host asks for textures again.
     if (this.failedTextureRevision === revision) {
       this.setTextureState("failed");
@@ -941,18 +961,24 @@ export class WorldViewer {
     }
     this.textureLoad?.abort.abort();
     const abort = new AbortController();
-    this.textureLoad = { revision, pbr, abort };
+    this.textureLoad = { revision, pbr, maxSide, abort };
     this.setTextureState("loading");
     const base = this.options.textureBase ?? "/textures";
     // While the atlas is missing, the host may have changed stacks: each 404 asks it to check.
     const stale = () => this.options.onStaleTextures?.();
-    BlockAtlas.load(`${base}/${revision}/atlas.bin`, abort.signal, stale)
+    BlockAtlas.load(`${base}/${revision}/atlas.bin`, abort.signal, stale, maxSide)
       .then(async (atlas) => {
         if (!pbr) return { atlas, pbrAtlas: undefined };
         try {
           return {
             atlas,
-            pbrAtlas: await PbrAtlas.load(`${base}/${revision}`, atlas, abort.signal, stale),
+            pbrAtlas: await PbrAtlas.load(
+              `${base}/${revision}`,
+              atlas,
+              abort.signal,
+              stale,
+              maxSide,
+            ),
           };
         } catch (cause) {
           if (abort.signal.aborted) {
@@ -982,6 +1008,7 @@ export class WorldViewer {
             atlas,
             pbr: pbrAtlas,
             pbrWanted: this.wantsPbr(revision),
+            maxSide,
             look,
             materials: createTexturedMaterials(
               this.atmosphere,
@@ -1056,6 +1083,8 @@ export class WorldViewer {
     this.resize();
     this.fitViewDistance();
     this.regionsChanged = true;
+    // A 4096 atlas loads at half size in mobile mode.
+    this.applyTextures();
   }
 
   setMobilePixelRatio(ratio: MobilePixelRatio): void {
@@ -1461,10 +1490,11 @@ export class WorldViewer {
   private updateShadow(): void {
     const focus = this.rig.focus;
     // Extents snap to steps of the square root of two, so zooming re-renders only a few times.
-    const wanted = MathUtils.clamp(this.shadowReach(), 48, MAX_SHADOW_EXTENT);
+    const wanted = MathUtils.clamp(this.shadowReach(), MIN_SHADOW_EXTENT, MAX_SHADOW_EXTENT);
     const extent = 2 ** (Math.round(Math.log2(wanted) * 2) / 2);
     const texel = (extent * 2) / SHADOW_MAP_SIZE;
-    // The depth range grows with the map, and the biases keep the same size in blocks.
+    // The depth range grows with the map. The biases follow the texel size, so up close they
+    // stay small enough for thin parts such as fences and bars to keep their shadows.
     const sunDistance = Math.max(900, extent * 1.5);
     const depth = sunDistance * 2.2;
     const step = texel * 16;
@@ -1482,8 +1512,8 @@ export class WorldViewer {
     shadowCamera.near = 1;
     shadowCamera.far = depth;
     shadowCamera.updateProjectionMatrix();
-    this.sun.shadow.bias = -0.8 / depth;
-    this.sun.shadow.normalBias = Math.max(0.35, texel * 1.4);
+    this.sun.shadow.bias = -MathUtils.clamp(texel * 3, 0.1, 0.8) / depth;
+    this.sun.shadow.normalBias = Math.max(MathUtils.clamp(texel * 4, 0.06, 0.35), texel * 1.4);
     this.sun.target.position.set(snappedX, focus.y, snappedZ);
     this.sun.position
       .copy(this.sun.target.position)

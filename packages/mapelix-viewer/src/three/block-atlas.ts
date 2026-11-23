@@ -3,6 +3,8 @@ import {
   atlasGutter,
   atlasLevelSize,
   decodeTextureAtlas,
+  fitAtlasSide,
+  MAX_ATLAS_SIDE,
   type TextureAtlas,
 } from "@mapelix/scene-prototype/texture-format";
 import {
@@ -14,6 +16,21 @@ import {
   SRGBColorSpace,
   UnsignedByteType,
 } from "three/webgpu";
+
+/**
+ * The largest atlas side to load: what the device samples, and at most 2048 in mobile mode so
+ * a 4096 atlas loads at half size there. Unknown limits count as 2048.
+ */
+export function atlasMaxSide(backend: unknown, mobile: boolean): number {
+  const gpu = backend as {
+    readonly device?: { readonly limits?: { readonly maxTextureDimension2D?: number } };
+    readonly gl?: WebGL2RenderingContext;
+  };
+  const side =
+    gpu.device?.limits?.maxTextureDimension2D ?? gpu.gl?.getParameter(gpu.gl.MAX_TEXTURE_SIZE);
+  const device = typeof side === "number" && side > MAX_ATLAS_SIDE ? side : MAX_ATLAS_SIDE;
+  return mobile ? MAX_ATLAS_SIDE : device;
+}
 
 /**
  * The block texture atlas on the GPU: the atlas image with its own mipmaps, which stop where
@@ -36,8 +53,14 @@ export class BlockAtlas {
   readonly animation: DataTexture;
   /** GPU bytes of both textures. */
   readonly gpuBytes: number;
+  /** Largest side of the atlas as served, before levels were dropped to fit. */
+  readonly fullSide: number;
 
-  constructor(atlas: TextureAtlas) {
+  /** Loads `served` without as many first levels as it takes to fit `maxSide`. */
+  constructor(served: TextureAtlas, maxSide = MAX_ATLAS_SIDE) {
+    const full = atlasLevelSize(served, 0);
+    this.fullSide = Math.max(full.width, full.height);
+    const atlas = fitAtlasSide(served, maxSide);
     this.tileSize = atlas.tileSize;
     this.gutter = atlasGutter(atlas.tileSize);
     this.cellSize = atlasCellSize(atlas.tileSize);
@@ -83,17 +106,22 @@ export class BlockAtlas {
    * Fetches and decodes `atlas.bin`; the browser caches it under its immutable URL. A server
    * answers 404 while it builds the atlas, so a missing atlas is asked again after 0.5, 1, 2...
    * seconds, at most 30 between tries, before the load fails. `onMissing` hears each 404, so the
-   * caller can check whether the revision is still current; aborting stops the waits.
+   * caller can check whether the revision is still current; aborting stops the waits. An atlas
+   * wider than `maxSide` loads without its first mipmap levels.
    */
   static async load(
     url: string,
     signal?: AbortSignal,
     onMissing?: () => void,
+    maxSide = MAX_ATLAS_SIDE,
   ): Promise<BlockAtlas> {
     for (let attempt = 0; ; attempt++) {
       const response = await fetch(url, signal === undefined ? {} : { signal });
       if (response.ok)
-        return new BlockAtlas(decodeTextureAtlas(new Uint8Array(await response.arrayBuffer())));
+        return new BlockAtlas(
+          decodeTextureAtlas(new Uint8Array(await response.arrayBuffer())),
+          maxSide,
+        );
       if (response.status !== 404 || attempt >= ATLAS_RETRIES)
         throw new Error(`Texture atlas: HTTP ${response.status}`);
       onMissing?.();
@@ -126,8 +154,19 @@ export class PbrAtlas {
   readonly material: PbrLayer;
   readonly tileSize: number;
   readonly gpuBytes: number;
+  /** Largest side of the atlases as served, before levels were dropped to fit. */
+  readonly fullSide: number;
 
-  constructor(normal: TextureAtlas, material: TextureAtlas, color: BlockAtlas) {
+  constructor(
+    servedNormal: TextureAtlas,
+    servedMaterial: TextureAtlas,
+    color: BlockAtlas,
+    maxSide = MAX_ATLAS_SIDE,
+  ) {
+    const full = atlasLevelSize(servedNormal, 0);
+    this.fullSide = Math.max(full.width, full.height);
+    const normal = fitAtlasSide(servedNormal, maxSide);
+    const material = fitAtlasSide(servedMaterial, maxSide);
     if (
       normal.columns !== color.columns ||
       normal.rows !== color.rows ||
@@ -144,17 +183,21 @@ export class PbrAtlas {
     this.gpuBytes = bytes;
   }
 
-  /** Fetches `normal.bin` and `mer.bin` beside the color atlas, waiting as `BlockAtlas.load`. */
+  /**
+   * Fetches `normal.bin` and `mer.bin` beside the color atlas, waiting and fitting `maxSide` as
+   * `BlockAtlas.load`.
+   */
   static async load(
     base: string,
     color: BlockAtlas,
     signal?: AbortSignal,
     onMissing?: () => void,
+    maxSide = MAX_ATLAS_SIDE,
   ): Promise<PbrAtlas> {
     const [normal, material] = await Promise.all(
       ["normal.bin", "mer.bin"].map((file) => fetchAtlas(`${base}/${file}`, signal, onMissing)),
     );
-    return new PbrAtlas(normal!, material!, color);
+    return new PbrAtlas(normal!, material!, color, maxSide);
   }
 
   dispose(): void {

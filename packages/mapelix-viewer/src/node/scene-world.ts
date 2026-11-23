@@ -105,6 +105,12 @@ export type SceneTextureOptions = TextureStackSource & {
   /** GPU memory the atlas may take with its mipmaps (default 32). */
   readonly budgetMiB?: number;
   /**
+   * Largest side of the atlases, 2048 (default) or 4096. 4096 lets a full high-resolution stack
+   * keep 64-texel tiles for desktop GPUs; mobile mode and devices limited to 2048 load them at
+   * half size. Raise `budgetMiB` and `pbrBudgetMiB` with it, or tiles stay small.
+   */
+  readonly maxAtlasSide?: number;
+  /**
    * Tile side of the normal and material atlases of packs with texture sets: 16, 32 or 64
    * (default 32). Smaller when the budget or the largest atlas side asks for it.
    */
@@ -300,12 +306,16 @@ export function createSceneServer(options: SceneServerOptions) {
     textureMaxTileSize > 256
   )
     throw new RangeError("textures.maxTileSize must be a power of two from 4 to 256");
+  const maxAtlasSide = textureOptions?.maxAtlasSide ?? 2048;
+  if (maxAtlasSide !== 2048 && maxAtlasSide !== 4096)
+    throw new RangeError("textures.maxAtlasSide must be 2048 or 4096");
   const pbrTileSize = textureOptions?.pbrTileSize ?? 32;
   if (![16, 32, 64].includes(pbrTileSize))
     throw new RangeError("textures.pbrTileSize must be 16, 32 or 64");
   const textureSettings = {
     maxTileSize: textureMaxTileSize,
     budgetBytes: positiveInteger(textureOptions?.budgetMiB ?? 32, "textures.budgetMiB") * MIB,
+    maxAtlasSide,
     pbr: {
       tileSize: pbrTileSize,
       budgetBytes:

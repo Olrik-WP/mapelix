@@ -24,19 +24,21 @@ const option = (name: string): number | undefined => {
 };
 const maxTileSize = option("--max-tile-size");
 const budgetMiB = option("--budget-mib");
+const maxAtlasSide = option("--max-atlas-side");
 const pbrTileSize = option("--pbr-tile-size");
 const pbrBudgetMiB = option("--pbr-budget-mib");
 const packs = args[0] === "--packs";
 const paths = packs ? args.slice(1) : args;
 if (paths.length === 0 || (!packs && paths.length !== 1) || paths.some((p) => p.startsWith("--"))) {
   process.stderr.write(
-    "Usage: mapelix-textures <stack folder> | --packs <pack>... [--max-tile-size n] [--budget-mib n] [--pbr-tile-size n] [--pbr-budget-mib n]\n",
+    "Usage: mapelix-textures <stack folder> | --packs <pack>... [--max-tile-size n] [--budget-mib n] [--max-atlas-side 2048|4096] [--pbr-tile-size n] [--pbr-budget-mib n]\n",
   );
   process.exit(2);
 }
 const report = await validateTextureStack(packs ? { packs: paths } : { stack: paths[0]! }, {
   ...(maxTileSize === undefined ? {} : { maxTileSize }),
   ...(budgetMiB === undefined ? {} : { budgetBytes: budgetMiB * 1024 * 1024 }),
+  ...(maxAtlasSide === undefined ? {} : { maxAtlasSide }),
   pbr: {
     tileSize: pbrTileSize ?? 32,
     budgetBytes: (pbrBudgetMiB ?? 48) * 1024 * 1024,

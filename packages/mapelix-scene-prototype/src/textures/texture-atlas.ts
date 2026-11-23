@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   isCutoutTile,
   ATLAS_FORMAT_VERSION,
+  LARGE_ATLAS_SIDE,
   MAX_ATLAS_SIDE,
   MAX_ATLAS_TILES,
   MIN_ATLAS_TILE,
@@ -43,6 +44,12 @@ export interface TextureAtlasOptions {
   readonly maxTileSize?: number;
   /** GPU bytes the atlas and its mipmaps may take; tiles shrink until it fits (default 32 MiB). */
   readonly budgetBytes?: number;
+  /**
+   * Largest atlas side, 2048 (default) or 4096, for the PBR atlases too. Every device samples
+   * 2048; 4096 lets a full high-resolution stack keep 64-texel tiles on desktop GPUs, and viewers
+   * that cannot sample it drop the first mipmap levels. Counts in the revision only at 4096.
+   */
+  readonly maxAtlasSide?: number;
   /**
    * Builds the normal and material atlases of the stack's texture sets too. Ignored when no
    * pack holds texture sets; it then changes neither the atlas nor its revision.
@@ -138,6 +145,7 @@ export interface BuiltTextureAtlas {
 export const DEFAULT_ATLAS_OPTIONS = {
   maxTileSize: 32,
   budgetBytes: 32 * 1024 * 1024,
+  maxAtlasSide: MAX_ATLAS_SIDE,
 } as const;
 
 /** Lookups for `resolveBlockTextures` from an index. */
@@ -186,9 +194,14 @@ function atlasOptions(
   if (!Number.isSafeInteger(budgetBytes) || budgetBytes < 1) {
     throw new RangeError("budgetBytes must be a positive integer");
   }
+  const maxAtlasSide = options.maxAtlasSide ?? DEFAULT_ATLAS_OPTIONS.maxAtlasSide;
+  if (maxAtlasSide !== MAX_ATLAS_SIDE && maxAtlasSide !== LARGE_ATLAS_SIDE) {
+    throw new RangeError(`maxAtlasSide must be ${MAX_ATLAS_SIDE} or ${LARGE_ATLAS_SIDE}`);
+  }
   return {
     maxTileSize,
     budgetBytes,
+    maxAtlasSide,
     ...(options.pbr === undefined ? {} : { pbr: pbrOptions(options.pbr) }),
   };
 }
@@ -202,7 +215,7 @@ export function textureRevision(
   stackFingerprint: string,
   options: TextureAtlasOptions = {},
 ): string {
-  const { maxTileSize, budgetBytes, pbr } = atlasOptions(options);
+  const { maxTileSize, budgetBytes, maxAtlasSide, pbr } = atlasOptions(options);
   const parts: (string | number)[] = [
     "mapelix-atlas",
     ATLAS_FORMAT_VERSION,
@@ -210,6 +223,8 @@ export function textureRevision(
     maxTileSize,
     budgetBytes,
   ];
+  // The default side keeps the revisions built before the option existed.
+  if (maxAtlasSide !== MAX_ATLAS_SIDE) parts.push("side", maxAtlasSide);
   if (pbr !== undefined) parts.push("pbr", pbr.tileSize, pbr.budgetBytes);
   return createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 20);
 }
@@ -222,7 +237,7 @@ export async function buildTextureAtlas(
   stack: ResourcePackStack,
   options: TextureAtlasOptions = {},
 ): Promise<BuiltTextureAtlas> {
-  const { maxTileSize, budgetBytes, pbr: askedPbr } = atlasOptions(options);
+  const { maxTileSize, budgetBytes, maxAtlasSide, pbr: askedPbr } = atlasOptions(options);
   const pbr = stack.hasTextureSets ? askedPbr : undefined;
 
   // The merged entries: each block and terrain name from the first pack defining it.
@@ -310,7 +325,7 @@ export async function buildTextureAtlas(
   }
 
   // The tile size is the most common texture size, bounded by the options, the budget and the
-  // largest texture every device can sample.
+  // largest atlas side.
   const sides = new Map<number, number>();
   for (const source of sources)
     sides.set(source.side, (sides.get(source.side) ?? 0) + source.frames.length);
@@ -323,8 +338,8 @@ export async function buildTextureAtlas(
   const rows = Math.ceil(count / columns);
   const fits = (tile: number): boolean =>
     atlasBytes({ tileSize: tile, columns, rows }) <= budgetBytes &&
-    columns * atlasCellSize(tile) <= MAX_ATLAS_SIDE &&
-    rows * atlasCellSize(tile) <= MAX_ATLAS_SIDE;
+    columns * atlasCellSize(tile) <= maxAtlasSide &&
+    rows * atlasCellSize(tile) <= maxAtlasSide;
   while (tileSize > MIN_ATLAS_TILE && !fits(tileSize)) tileSize /= 2;
   if (!fits(tileSize)) {
     throw new RangeError(`${count} block textures do not fit in the texture budget`);
@@ -397,10 +412,11 @@ export async function buildTextureAtlas(
   const fingerprint = textureRevision(stack.fingerprint, {
     maxTileSize,
     budgetBytes,
+    maxAtlasSide,
     ...(pbr === undefined ? {} : { pbr }),
   });
   const pbrAtlases =
-    pbr === undefined ? undefined : await buildPbrAtlases(stack, placed, atlas, pbr);
+    pbr === undefined ? undefined : await buildPbrAtlases(stack, placed, atlas, pbr, maxAtlasSide);
   return {
     fingerprint,
     atlas,
@@ -436,11 +452,12 @@ async function buildPbrAtlases(
   placed: readonly Placed[],
   color: TextureAtlas,
   options: Required<PbrAtlasOptions>,
+  maxAtlasSide: number,
 ): Promise<BuiltPbrAtlases> {
   const { columns, rows } = color;
   const fits = (tile: number): boolean =>
     2 * atlasBytes({ tileSize: tile, columns, rows }) <= options.budgetBytes &&
-    Math.max(columns, rows) * atlasCellSize(tile) <= MAX_ATLAS_SIDE;
+    Math.max(columns, rows) * atlasCellSize(tile) <= maxAtlasSide;
   let tileSize = options.tileSize;
   while (tileSize > MIN_ATLAS_TILE && !fits(tileSize)) tileSize /= 2;
   const cell = atlasCellSize(tileSize);
