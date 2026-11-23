@@ -260,6 +260,11 @@ export class RegionStreamer {
    * a second variant: the plain region stays on screen until its textured twin arrives, then
    * they dissolve into each other, and back when textures stop or the camera moves away.
    */
+  /** The textures regions are requested with, so another streamer can share them. */
+  get streamedTextures(): StreamedTextures | undefined {
+    return this.textures;
+  }
+
   setTextures(textures: StreamedTextures | undefined): void {
     const previous = this.textures;
     this.textures = textures;

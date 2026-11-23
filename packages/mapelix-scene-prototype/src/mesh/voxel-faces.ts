@@ -7,6 +7,11 @@ import { Face, QuadMaterial, type QuadBox } from "../format.js";
 
 /** How far below a column's roof, in blocks, the sky trace follows open air under eaves and trees. */
 export const COVER_DEPTH = 32;
+/**
+ * How far below a column's roof, in blocks, cave views follow open air under overhangs. Short,
+ * so the mouth of a cave in a hillside stays part of the cave.
+ */
+export const CAVE_SKY_DEPTH = 8;
 
 /** Cell index steps along each face's normal and tangents, in `Face` order. */
 export interface FaceSteps {
@@ -354,9 +359,10 @@ export interface OpenAir {
  * Finds the covered air that a camera can see from outside. A flood fill follows air under
  * eaves, trees, and into rooms, down to `depth` layers below each column's roof. Sight
  * lines follow air that sees the sky while moving one way along x or z and upward, at any
- * depth, so the ground under platforms, bridges, and raised builds stays open.
+ * depth, so the ground under platforms, bridges, and raised builds stays open. Without
+ * `sightLines`, only the flood fill runs, so tunnels behind an opening stay covered.
  */
-export function findOpenAir(volume: SkyVolume, depth: number): OpenAir {
+export function findOpenAir(volume: SkyVolume, depth: number, sightLines = true): OpenAir {
   const { size, layers, roof } = volume;
   const area = size * size;
   const top = Math.min(layers - 1, highestRoof(roof));
@@ -369,6 +375,7 @@ export function findOpenAir(volume: SkyVolume, depth: number): OpenAir {
     lowest: roof.map((layer) => layer + 1),
   };
   floodCoveredAir(volume, opaque, depth, open);
+  if (!sightLines) return open;
   for (const step of [1, -1, size, -size]) traceSightLines(volume, opaque, top, step, open);
   return open;
 }

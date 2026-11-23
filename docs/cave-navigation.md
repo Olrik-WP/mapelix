@@ -38,9 +38,10 @@ Explicit camera placement drains old control damping before applying the pose.
 
 The caves view has no clock: a fixed fill light shines from the camera, slightly above and to
 the left, so walls facing the view are brightest and relief shows. Block light (torches, lava,
-glowing blocks) adds to it. `setCaveBrightness(0..1.5)` scales the fill (1 by default); 0
+glowing blocks) adds to it. `setCaveBrightness(0..1.5)` scales the fill (0.2 by default, a dim light that keeps torches and
+glowing blocks readable); 0
 leaves only block light and glowing texels, as at night. The settings panel shows it as a
-"Cave light" slider and the address keeps `caveLight` when it is not 1.
+"Cave light" slider and the address keeps `caveLight` when it is not 0.2.
 
 ## Automatic following and limits
 
@@ -50,19 +51,27 @@ The local `autoDepth=0|1` URL parameter overrides the optional browser preferenc
 `mapelix-auto-depth-v1`. Manual slicing continues to work.
 
 Only held vertical input near a boundary requests the adjacent 16-block step.
-Thickness remains 16 or 32 (default 32), bounds remain section-aligned and maxY
-remains exclusive. A 32-block window starts following within four blocks of its
-last visible block, retaining overlap and camera pose. A 16-block window changes
-at the last visible block; the focus moves by at most one block into its neighbor.
-Movement stops at dimension limits and cannot widen the slice.
+Thickness remains 16, 32 or 64 (default 32), bounds remain section-aligned and maxY
+remains exclusive. A window of 32 blocks or more asks for its neighbor a quarter of
+its height (8 or 16 blocks) before its last visible block, so the next slice can load while the
+focus keeps moving; the focus lies inside both slices, and overlap and camera pose
+are retained. A 16-block window changes at the last visible block; the focus moves
+by at most one block into its neighbor. Movement stops at dimension limits and
+cannot widen the slice.
+
+The next slice loads out of sight: its streamer requests the regions around the
+camera while the current slice stays on screen, and replaces it once that terrain
+is loaded, or after ten seconds. Exploring never shows an empty view between two
+depths. `snapshot().navigation.loading` stays true until the replacement.
 
 Following requires 250 ms of held intent, a settled terrain streamer and at least
 2000 ms between metadata requests (configurable, minimum 1000). Only one metadata
-request may be pending. It is aborted on manual `setWorld`, disable, recovery and
-disposal; late replies are ignored. Incorrect contexts and changed snapshot
-revisions are rejected before releasing terrain. No adjacent-window prefetch or
-additional worker pool is created. Applying a slice releases the previous
-streamer's meshes and requests, reusing the existing bounded mesh pool.
+request may be pending. It and a slice loading out of sight are dropped on manual
+`setWorld`, disable, recovery, lighting changes and disposal; late replies are
+ignored. Incorrect contexts and changed snapshot revisions are rejected before
+any terrain loads. At most two cave streamers exist, each within the cave memory
+budget, and no additional worker pool is created. Applying a slice releases the
+previous streamer's meshes and requests, reusing the existing bounded mesh pool.
 
 Caves and discovery source downloads share **two concurrent slots**, including
 body download. A 429/503 `Retry-After` (seconds or HTTP date) pauses both kinds of
@@ -73,12 +82,47 @@ streaming retains its existing parallelism. Request rate limits stay with
 the serving host; the viewer waits for its advertised retry delay.
 
 Source discovery packets/cache identities remain independent of depth. Existing
-encoded/GPU budgets, LOD 0/1 and maximum 128-block cave reach are unchanged.
+encoded/GPU budgets and LOD 0/1 are unchanged. The cave reach is 256 blocks, see
+"Reach and thickness" below.
 There is no server change, region/discovery format change or cache-key revision.
 Already cached regions remain valid.
 A server that fingerprints the two engine packages keeps its region revision,
 since this change does not modify them: a viewer-only update needs no region
 cache invalidation.
+
+## What a cave slice shows
+
+A cave slice draws the faces that border enclosed air: caverns, tunnels, mines and the
+inside of buildings. It leaves out, at LOD 0 and LOD 1:
+
+- **Open sky.** Each column's sky roof is its highest opaque block other than leaves,
+  read from the top sections of the whole chunk, not only from the slice
+  (`chunkRoofs`, cached per chunk). Air above it is open sky, and so is the air up to
+  eight blocks under an overhang beside it (`CAVE_SKY_DEPTH`). Ground, cliffs, ravines,
+  water surfaces and sea floors under the open sky therefore disappear, while a cave
+  mouth keeps its passage beyond those eight blocks. This applies to the Overworld; the
+  Nether, under its bedrock roof, and the End are unchanged.
+- **Unstored chunks.** Land that was never generated used to read as air, so every
+  slice drew stone walls around it. Faces toward chunks the world does not store are
+  no longer drawn.
+
+Region heights in a slice follow the highest block with a visible face, so a flight
+lands on visible terrain. These are mesher changes: the engine fingerprint changes,
+which renews cached regions, but the region format, cache keys and embed API do not.
+
+## Reach and thickness
+
+Caves are a true volume, so they never use the coarse LODs that keep a distant Surface
+light: beyond 2-block voxels, tunnels close up or vanish. Their reach is therefore
+bounded, at 256 blocks (`CAVE_LIMITS.viewDistance`, formerly 128), and the camera
+zooms out to three quarters of it. In a measured world, a 64-block slice at full
+reach drew 55 regions, about 19 MiB and 1 M quads, within the 32 MiB cave budget;
+32-block slices weigh less. The main cost is the first build of each region on the
+server, cached afterwards.
+
+The 64-block thickness gives overviews of deep caverns and ravines; 32 stays the
+default, as wider slices stack levels of caves on top of each other. Each thickness
+is its own cache variant on the server, alongside 16 and 32.
 
 ## Optional host additions
 

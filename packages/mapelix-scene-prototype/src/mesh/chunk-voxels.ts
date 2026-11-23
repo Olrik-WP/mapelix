@@ -9,7 +9,7 @@ import {
   VoxelKind,
   WATERLOGGED,
 } from "./block-palette.js";
-import { sectionCells } from "./region-volume.js";
+import { chunkRoofs, sectionCells } from "./region-volume.js";
 import { COVER_DEPTH } from "./voxel-faces.js";
 import { VoxelBox, halveVoxels, isOpaqueKind } from "./voxel-box.js";
 
@@ -62,6 +62,11 @@ export class ChunkVoxelReader {
   constructor(chunks: ChunkSource, palette: BlockPalette) {
     this.chunks = chunks;
     this.palette = palette;
+  }
+
+  /** The sky roof of each column of a stored chunk, see `chunkRoofs`. */
+  roofs(chunkX: number, chunkZ: number): Int16Array | undefined {
+    return chunkRoofs(this.chunks, this.palette, chunkX, chunkZ);
   }
 
   /** Reads a chunk as voxels `voxelSize` blocks wide, a power of two up to 16. */

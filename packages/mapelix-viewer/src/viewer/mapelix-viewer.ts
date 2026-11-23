@@ -31,7 +31,7 @@ import type { AutoPerspective } from "../three/view-projection.js";
 import type { WeatherMode } from "../three/weather-layer.js";
 import { renderProfileSettings, type RenderProfile } from "./render-profile.js";
 import { mobilePixelRatio, type MobilePixelRatio } from "../three/render-quality.js";
-import { caveBrightness } from "../three/cave-brightness.js";
+import { CAVE_BRIGHTNESS_DEFAULT, caveBrightness } from "../three/cave-brightness.js";
 import type {
   BlockLightSettings,
   LeafMode,
@@ -114,7 +114,7 @@ export interface WorldSettings {
   readonly viewMode: "surface" | "caves";
   /** Lowest Y of the cave slice, a multiple of 16. */
   readonly caveMinY: number;
-  /** Cave slice thickness, 16 or 32 blocks. */
+  /** Cave slice thickness in blocks, one of `CAVE_LIMITS.thicknesses`. */
   readonly caveThickness: number;
   /** Height from which the Nether surface view hides terrain, a multiple of 16. */
   readonly netherCeilingY: number;
@@ -133,7 +133,7 @@ export interface WorldSettings {
   readonly pbr?: PbrMode;
   /** Cave slices follow the camera depth. */
   readonly autoDepth: boolean;
-  /** Fill light of the cave view, 0 to 1.5 (default 1); lower shows torches and glowing ores. */
+  /** Fill light of the cave view, 0 to 1.5 (default 0.2); lower shows torches and glowing ores. */
   readonly caveBrightness?: number;
   readonly discoveries: DiscoveryFilters;
   /** Cave exploration area. */
@@ -160,7 +160,7 @@ export const DEFAULT_WORLD_SETTINGS: WorldSettings = {
   leaves: "fast",
   pbr: "off",
   autoDepth: true,
-  caveBrightness: 1,
+  caveBrightness: CAVE_BRIGHTNESS_DEFAULT,
   discoveries: DEFAULT_DISCOVERY_FILTERS,
   selection: undefined,
   selectionTool: "off",
@@ -1230,7 +1230,7 @@ export class MapelixViewer {
           onTextureState: () => this.publish(),
           onStaleTextures: () => this.checkTextures(),
           autoDepth: this.settingsNow.autoDepth,
-          caveBrightness: this.settingsNow.caveBrightness ?? 1,
+          caveBrightness: this.settingsNow.caveBrightness ?? CAVE_BRIGHTNESS_DEFAULT,
           discoveryFilters: this.settingsNow.discoveries,
           ...(this.settingsNow.selection ? { selection: this.settingsNow.selection } : {}),
           // The host draws the discovery card where its controls leave room.

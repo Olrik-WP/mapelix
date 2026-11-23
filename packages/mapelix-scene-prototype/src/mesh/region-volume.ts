@@ -2,7 +2,7 @@ import type { DecodedSubchunk } from "@mapelix/prototype/bedrock";
 
 import { BASE_REGION_SPAN, WORLD_MAX_Y, WORLD_MIN_Y } from "../format.js";
 import { paddedBounds, type VerticalBounds } from "../dimensions.js";
-import type { ChunkSource, DecodedChunk } from "../world/chunk-source.js";
+import { decodeSection, type ChunkSource, type DecodedChunk } from "../world/chunk-source.js";
 import { BlockPalette, PALETTE_ID_MASK, Shape, WATERLOGGED } from "./block-palette.js";
 
 /** Neighbor blocks loaded around a level 0 region, for culling, occlusion, and sky tracing. */
@@ -30,6 +30,13 @@ export interface RegionVolume {
   /** Owner bounds, excluding the source halo. Present only for cave meshing. */
   readonly window?: VerticalBounds;
   readonly biomeAt?: (x: number, y: number, z: number) => number | undefined;
+  /** Cave meshing only: 1 for each column inside a stored chunk. Other columns hide nothing. */
+  readonly explored?: Uint8Array;
+  /**
+   * Cave meshing of surface dimensions only: the sky roof of each whole world column, see
+   * `chunkRoofs`, or `NO_BLOCK`. Air above it is open sky, which cave views leave out.
+   */
+  readonly skyRoof?: Int16Array;
   /** Highest opaque cube in each column. Air below it is covered from the sky. */
   readonly topSolid: Int16Array;
   /** Highest block of any visible kind in each column. */
@@ -101,7 +108,13 @@ export function buildRegionVolume(
       cells,
       ...(window === undefined
         ? {}
-        : { baseY: allocated.minY, limitY: allocated.maxY, window, biomeAt }),
+        : {
+            baseY: allocated.minY,
+            limitY: allocated.maxY,
+            window,
+            biomeAt,
+            ...caveColumns(chunks, palette, originX / 16, originZ / 16, loaded),
+          }),
     },
     palette,
     biomeAt,
@@ -115,7 +128,15 @@ export function buildRegionVolume(
 export function describeVolume(
   filled: Pick<
     RegionVolume,
-    "originX" | "originZ" | "cells" | "baseY" | "limitY" | "window" | "biomeAt"
+    | "originX"
+    | "originZ"
+    | "cells"
+    | "baseY"
+    | "limitY"
+    | "window"
+    | "biomeAt"
+    | "explored"
+    | "skyRoof"
   >,
   palette: BlockPalette,
   biomeAt: (x: number, y: number, z: number) => number | undefined,
@@ -140,6 +161,90 @@ export function describeVolume(
     }
   }
   return { ...filled, topSolid, topBlock, biomes };
+}
+
+/** Sky roofs kept per chunk source, 512 bytes per chunk. */
+const ROOF_CACHE_SIZE = 4096;
+const roofCaches = new WeakMap<ChunkSource, Map<string, Int16Array | undefined>>();
+/** Leaves let the sky through for cave views, so the ground under a canopy stays open. */
+const FOLIAGE = /leaves$/;
+
+/**
+ * The sky roof of each column of a stored chunk, `z * 16 + x`: its highest opaque block other
+ * than leaves, or `NO_BLOCK`. Sections are read from the top down until every column has its
+ * roof. The result does not depend on a cave slice, so it is kept per chunk.
+ */
+export function chunkRoofs(
+  chunks: ChunkSource,
+  palette: BlockPalette,
+  chunkX: number,
+  chunkZ: number,
+): Int16Array | undefined {
+  let cache = roofCaches.get(chunks);
+  if (cache === undefined) roofCaches.set(chunks, (cache = new Map()));
+  const key = `${chunkX},${chunkZ}`;
+  if (cache.has(key)) {
+    const cached = cache.get(key);
+    cache.delete(key);
+    cache.set(key, cached);
+    return cached;
+  }
+  const records = chunks.records(chunkX, chunkZ);
+  let roofs: Int16Array | undefined;
+  if (records !== undefined) {
+    roofs = new Int16Array(256).fill(NO_BLOCK);
+    let missing = 256;
+    for (const record of records.sections) {
+      const section = decodeSection(record);
+      if (section === undefined) continue;
+      const storage = section.primary;
+      const roof = storage.palette.map(
+        (name, index) =>
+          !FOLIAGE.test(name) && palette.isOpaque(palette.idFor(name, storage.states?.[index])),
+      );
+      const baseY = section.y * 16;
+      for (let index = 0; index < 4096; index += 1) {
+        if (!roof[storage.indexes[index]!]) continue;
+        // Bedrock order is `x * 256 + z * 16 + y`.
+        const column = ((index >> 4) & 15) * 16 + (index >> 8);
+        const y = baseY + (index & 15);
+        if (roofs[column] === NO_BLOCK) missing -= 1;
+        if (y > roofs[column]!) roofs[column] = y;
+      }
+      // Records run from the top section down, so the first roof found is the highest.
+      if (missing === 0) break;
+    }
+  }
+  cache.set(key, roofs);
+  if (cache.size > ROOF_CACHE_SIZE) cache.delete(cache.keys().next().value!);
+  return roofs;
+}
+
+/** Which volume columns lie in stored chunks, and their sky roofs where the sky is open. */
+function caveColumns(
+  chunks: ChunkSource,
+  palette: BlockPalette,
+  firstChunkX: number,
+  firstChunkZ: number,
+  loaded: ReadonlyArray<DecodedChunk | undefined>,
+): Pick<RegionVolume, "explored" | "skyRoof"> {
+  const explored = new Uint8Array(VOLUME_LAYER);
+  const skyRoof =
+    chunks.config.geometry === "surface" ? new Int16Array(VOLUME_LAYER).fill(NO_BLOCK) : undefined;
+  for (let row = 0; row < CHUNKS_PER_SIDE; row += 1) {
+    for (let column = 0; column < CHUNKS_PER_SIDE; column += 1) {
+      if (loaded[row * CHUNKS_PER_SIDE + column] === undefined) continue;
+      const roofs = skyRoof && chunkRoofs(chunks, palette, firstChunkX + column, firstChunkZ + row);
+      for (let z = 0; z < 16; z += 1) {
+        for (let x = 0; x < 16; x += 1) {
+          const index = (row * 16 + z) * VOLUME_SIZE + column * 16 + x;
+          explored[index] = 1;
+          if (skyRoof !== undefined && roofs !== undefined) skyRoof[index] = roofs[z * 16 + x]!;
+        }
+      }
+    }
+  }
+  return skyRoof === undefined ? { explored } : { explored, skyRoof };
 }
 
 function writeSection(

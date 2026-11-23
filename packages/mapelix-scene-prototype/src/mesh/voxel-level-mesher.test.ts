@@ -50,4 +50,46 @@ describe("voxel level mesher", () => {
     expect(underside).toEqual([expect.objectContaining({ x: 40, z: 40, y: 20, width: 10 })]);
     expect(quads.some((quad) => quad.y > 15 && quad.y < 20)).toBe(false);
   });
+
+  it("draws no cave walls toward unexplored land, nor faces under the open sky", () => {
+    const box = new VoxelBox(SPAN + MARGIN * 2, 24);
+    const explored = new Uint8Array(box.width ** 2);
+    for (let z = 0; z < box.width; z += 1) {
+      for (let x = 0; x < box.width; x += 1) {
+        if (x >= MARGIN + 6) continue;
+        explored[z * box.width + x] = 1;
+        for (let layer = 0; layer < 16; layer += 1) {
+          // A sealed cave at layers 4..5 under ground that ends at layer 15.
+          if (layer >= 4 && layer <= 5 && x === MARGIN + 2 && z === MARGIN + 2) continue;
+          const index = box.index(x, layer, z);
+          box.kind[index] = VoxelKind.Solid;
+          box.fill[index] = 16;
+        }
+      }
+    }
+    const size = regionCellSize(LEVEL);
+    const region = meshVoxelRegion(
+      {
+        level: LEVEL,
+        x: 0,
+        z: 0,
+        voxelSize: size,
+        span: SPAN,
+        margin: MARGIN,
+        low: 0,
+        box,
+        explored,
+        window: { minY: 0, maxY: 24 * size },
+        skyRoof: new Int16Array(box.width ** 2).fill(16 * size - 1),
+      },
+      "interior",
+    );
+    const quads = Array.from({ length: region.opaque.length / 3 }, (_, index) =>
+      unpackQuad(region.opaque, index),
+    );
+    expect(quads.length).toBeGreaterThan(0);
+    // Quads are in voxel units: only the cave, from the floor at layer 3 to the ceiling at 6.
+    expect(quads.every((quad) => quad.y >= 3 && quad.y <= 6)).toBe(true);
+    expect(quads.some((quad) => quad.face === Face.PositiveX && quad.x === 5)).toBe(false);
+  });
 });

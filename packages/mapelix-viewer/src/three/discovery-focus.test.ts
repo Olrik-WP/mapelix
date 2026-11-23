@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sceneContext } from "@mapelix/scene-prototype/dimensions";
+import { CAVE_LIMITS, sceneContext } from "@mapelix/scene-prototype/dimensions";
 import {
   packDiscoveryBlock,
   type DiscoveryGroup,
@@ -93,7 +93,10 @@ describe("discovery framing", () => {
     const distance = discoveryDistance(buried, 6, { maxY: context.maxY, pitch: 0.9 });
     expect(distance).toBeGreaterThanOrEqual(18);
     expect(buried.y + Math.sin(0.9) * distance).toBeGreaterThan(context.maxY);
-    expect(discoveryDistance(buried, 6, { maxY: 80, pitch: 0.15 })).toBe(96);
+    // A grazing view backs out no farther than the camera may zoom in a cave slice.
+    expect(discoveryDistance(buried, 6, { maxY: 96, pitch: 0.05 })).toBe(
+      CAVE_LIMITS.viewDistance * 0.75,
+    );
     const mixed = { ...buried, count: 2, exposed: 1 };
     expect(discoveryDistance(mixed, 6)).toBe(18);
     expect(discoveryDistance(mixed, 6, { maxY: 80, pitch: 0.9, exposed: true })).toBe(6);

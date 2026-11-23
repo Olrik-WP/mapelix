@@ -17,11 +17,11 @@ test("cave HTTP contexts normalize negative aliases and reject unsupported slice
     minY: -64,
     maxY: -32,
     ceilingY: -32,
-    caves: { thicknesses: [16, 32], defaultThickness: 32, maxLevel: 1, viewDistance: 128 },
+    caves: { thicknesses: [16, 32, 64], defaultThickness: 32, maxLevel: 1, viewDistance: 256 },
   });
   for (const query of [
     "mode=invalid",
-    "mode=caves&minY=-64&maxY=0",
+    "mode=caves&minY=-64&maxY=64",
     "mode=caves&minY=-65&maxY=-33",
     "mode=caves&minY=-64&maxY=-32&ceilingY=-16",
     "mode=surface&minY=-32&maxY=0",

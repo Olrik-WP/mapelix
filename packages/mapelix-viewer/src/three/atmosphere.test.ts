@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Atmosphere } from "./atmosphere";
+import { CAVE_BRIGHTNESS_DEFAULT } from "./cave-brightness";
 
 describe("dimension atmosphere", () => {
   it("uses fixed cave exploration light and restores Surface lighting", () => {
@@ -9,7 +10,10 @@ describe("dimension atmosphere", () => {
     const light = atmosphere.setTimeOfDay(12);
     expect(atmosphere.setTimeOfDay(0)).toEqual(light);
     expect(atmosphere.caveLight.value).toBeGreaterThan(0);
+    const dim = atmosphere.caveLight.value;
+    atmosphere.setCaveBrightness(1);
     const full = atmosphere.caveLight.value;
+    expect(dim).toBeCloseTo(full * CAVE_BRIGHTNESS_DEFAULT);
     atmosphere.setCaveBrightness(0.5);
     expect(atmosphere.caveLight.value).toBeCloseTo(full / 2);
     expect(() => atmosphere.setCaveBrightness(2)).toThrow(RangeError);

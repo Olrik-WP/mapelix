@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { caveFixtureRecords } from "../../test/cave-fixture.js";
 import { dimensionFixtureRecords, writeFixtureWorld } from "../../test/dimension-fixture.js";
 import { contextFromSearch, contextKey, contextSearch, sceneContext } from "../dimensions.js";
-import { decodeSceneRegion, Face, unpackQuad } from "../format.js";
+import { decodeSceneRegion, EMPTY_HEIGHT, Face, unpackQuad } from "../format.js";
 import { RegionBuilder } from "./region-builder.js";
 
 describe("canonical underground windows", () => {
@@ -42,6 +42,23 @@ describe("canonical underground windows", () => {
     ).toBe(false);
     const { maxY, ...alias } = request;
     expect(builder.build({ ...alias, ceilingY: maxY })).toEqual(builder.build(request));
+  });
+
+  it.each([0, 1])("leaves the ground under the open sky out of a slice at LOD %i", (level) => {
+    const region = decodeSceneRegion(
+      builder.build({ mode: "caves", minY: 64, maxY: 96, level, x: 0, z: 0 }),
+    );
+    const faces = Array.from({ length: region.opaque.length / 3 }, (_, i) =>
+      unpackQuad(region.opaque, i),
+    );
+    // The grass at y 79 is open ground. The slab of stone under it shows at most its underside,
+    // over the unstored sections below (LOD 1 takes rock under its box), and no walls toward
+    // the chunks around the fixture. Heights follow that underside, rounded up to a voxel.
+    expect(faces.length > 0).toBe(level === 0);
+    expect(faces.every((q) => q.face === Face.NegativeY)).toBe(true);
+    expect(
+      region.heights.every((height) => height === EMPTY_HEIGHT || height <= 64 + 2 ** level),
+    ).toBe(true);
   });
 
   it("normalizes aliases and separates equal-bound visibility strategies", () => {

@@ -20,7 +20,7 @@ The browser-safe dimensions module accepts the original
   to the same context; conflicting aliases are rejected.
 - Surface retains its dimension floor and previous defaults: Overworld -64..320,
   Nether 0..96 and End 0..256. A raised floor requires explicit caves mode.
-- Caves initially accept thicknesses 16/32, default 32, and LOD 0/1. Bounds omitted
+- Caves accept thicknesses 16/32/64, default 32, and LOD 0/1. Bounds omitted
   in caves select the dimension's bottom 32 blocks. `CAVE_LIMITS` advertises these
   capabilities; unsupported thicknesses and LODs are rejected before generation.
 - Canonical metadata also includes `ceilingY=maxY` for existing consumers.

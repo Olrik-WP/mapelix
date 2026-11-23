@@ -1,6 +1,7 @@
 import { rgb } from "../blocks/block-appearance.js";
 import { regionCellSize, regionGridSize, regionSpan } from "../format.js";
 import { VoxelKind } from "./block-palette.js";
+import { NO_BLOCK } from "./region-volume.js";
 import type { ChunkVoxelReader } from "./chunk-voxels.js";
 import { VoxelBox, isOpaqueKind } from "./voxel-box.js";
 import type { VerticalBounds } from "../dimensions.js";
@@ -28,12 +29,19 @@ export interface VoxelRegion {
   readonly box: VoxelBox;
   /** 1 for each box column inside a stored chunk. Other columns are unexplored land. */
   readonly explored: Uint8Array;
+  /**
+   * Cave slices of surface dimensions only: the highest sky roof block, see `chunkRoofs`, of
+   * each box column, or `NO_BLOCK`. Air above it is open sky, which cave views leave out.
+   */
+  readonly skyRoof?: Int16Array;
 }
 
 interface PlacedChunk {
   /** Box column of the chunk's first voxel. */
   readonly x: number;
   readonly z: number;
+  readonly chunkX: number;
+  readonly chunkZ: number;
   readonly low: number;
   readonly box: VoxelBox;
 }
@@ -80,7 +88,13 @@ export function buildVoxelRegion(
         row < chunksPerSide - marginChunks &&
         column >= marginChunks &&
         column < chunksPerSide - marginChunks;
-      placed.push({ x: column * chunkVoxels, z: row * chunkVoxels, ...chunk });
+      placed.push({
+        x: column * chunkVoxels,
+        z: row * chunkVoxels,
+        chunkX: firstChunkX + column,
+        chunkZ: firstChunkZ + row,
+        ...chunk,
+      });
     }
   }
   if (!regionHasChunks) return undefined;
@@ -89,6 +103,10 @@ export function buildVoxelRegion(
   const high = Math.max(...placed.map((chunk) => chunk.low + chunk.box.layers * voxelSize));
   const box = new VoxelBox(span + margin * 2, (high - low) / voxelSize, level === 1 && blockLight);
   const explored = new Uint8Array(box.width * box.width);
+  const skyRoof =
+    window !== undefined && reader.geometry === "surface"
+      ? new Int16Array(box.width * box.width).fill(NO_BLOCK)
+      : undefined;
   for (const chunk of placed) {
     placeChunk(
       box,
@@ -102,6 +120,16 @@ export function buildVoxelRegion(
         (chunk.z + z) * box.width + chunk.x,
         (chunk.z + z) * box.width + chunk.x + chunkVoxels,
       );
+    }
+    const roofs = skyRoof && reader.roofs(chunk.chunkX, chunk.chunkZ);
+    if (skyRoof === undefined || roofs === undefined) continue;
+    // A voxel column takes the highest roof of its block columns.
+    for (let z = 0; z < 16; z += 1) {
+      for (let x = 0; x < 16; x += 1) {
+        const column = (chunk.z + Math.floor(z / voxelSize)) * box.width + chunk.x;
+        const index = column + Math.floor(x / voxelSize);
+        skyRoof[index] = Math.max(skyRoof[index]!, roofs[z * 16 + x]!);
+      }
     }
   }
   return {
@@ -117,6 +145,7 @@ export function buildVoxelRegion(
     ...(level === 1 && blockLight && blockLightColors ? { blockLightColors: true } : {}),
     ...(level === 1 && blockLight && blockLightSmooth ? { blockLightSmooth: true } : {}),
     ...(window === undefined ? {} : { window }),
+    ...(skyRoof === undefined ? {} : { skyRoof }),
   };
 }
 

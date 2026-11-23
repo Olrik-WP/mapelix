@@ -4,6 +4,7 @@ import {
   DISCOVERY_KINDS,
   type DiscoveryGroup,
 } from "@mapelix/scene-prototype/discoveries";
+import { CAVE_BRIGHTNESS_DEFAULT } from "../three/cave-brightness.js";
 import type { MapelixViewer, WorldSettings, WorldStatus } from "../viewer/mapelix-viewer.js";
 import type { ViewState } from "../viewer/view-state.js";
 import { MarkerEditor, type EditorSurface, type MarkerEditorOptions } from "./marker-editor.js";
@@ -1140,7 +1141,7 @@ export class ViewerControls {
       const brightness = this.part("cave-brightness");
       const brightnessInput = brightness?.querySelector("input");
       if (brightness && brightnessInput && document.activeElement !== brightnessInput) {
-        const percent = Math.round((settings.caveBrightness ?? 1) * 100);
+        const percent = Math.round((settings.caveBrightness ?? CAVE_BRIGHTNESS_DEFAULT) * 100);
         const label = (t.caveBrightness ?? ((p: number) => `Cave light ${p}%`))(percent);
         brightnessInput.value = String(percent);
         brightness.querySelector("label")!.textContent = label;

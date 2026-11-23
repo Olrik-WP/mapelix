@@ -38,7 +38,7 @@ import { ExplorationRequests } from "./exploration-requests";
 import { DiscoveryDetails } from "./discovery-details";
 import type { DiscoveryLabelFormatter } from "./discovery-label";
 import { discoveryContext, discoveryDistance, type DiscoveryDetailText } from "./discovery-focus";
-import { RegionStreamer, type StreamingStats } from "./region-streamer";
+import { RegionStreamer, type StreamedTextures, type StreamingStats } from "./region-streamer";
 import { RegionMeshPool } from "./region-mesh";
 import {
   PROJECTION_TRANSITION_SECONDS,
@@ -247,6 +247,16 @@ const SHADOW_MAP_SIZE = 4096;
 const MAX_SHADOW_EXTENT = 2048;
 /** Farthest the view grows on its own as the camera zooms out, in blocks. */
 const AUTO_VIEW_LIMIT = 32_768;
+/** Longest wait for a cave slice loading out of sight before it replaces the drawn one. */
+const STAGED_DEPTH_WAIT_MS = 10_000;
+
+/** A cave slice that loads out of sight while the current one stays on screen. */
+interface StagedDepth {
+  readonly world: WorldInfo;
+  readonly context: SceneContext;
+  readonly streamer: RegionStreamer;
+  readonly since: number;
+}
 
 /**
  * The 3D world view: renderer, lights, atmosphere, streaming, and camera. It
@@ -268,6 +278,7 @@ export class WorldViewer {
   private readonly sun = new DirectionalLight(0xffffff, 3);
   private readonly sky = new HemisphereLight(0xb9d3ec, 0x8a7a62, 1.4);
   private streamer: RegionStreamer;
+  private staged: StagedDepth | undefined;
   private readonly materials: SceneMaterials;
   private readonly meshPool = new RegionMeshPool();
   private readonly options: WorldViewerOptions;
@@ -362,8 +373,7 @@ export class WorldViewer {
           (this.world.snapshotRevision ?? this.world.revision)
         )
           throw new Error("The world snapshot changed; reopen the view before continuing");
-        this.applyWorld(next, true, true);
-        options.onDepthChange?.(this.context);
+        this.stageDepth(next);
       },
       options.autoDepth,
       options.autoDepthIntervalMs,
@@ -553,7 +563,11 @@ export class WorldViewer {
       context: this.context,
       selection: this.selections.get(this.context.dimension),
       discoveries: this.discoveries.stats,
-      navigation: this.depthFollow.state,
+      navigation: {
+        ...this.depthFollow.state,
+        // The next slice still counts as loading while it loads out of sight.
+        loading: this.depthFollow.state.loading || this.staged !== undefined,
+      },
       selectedDiscovery: this.selectedDiscovery,
       projection: {
         chosen: this.projectionChoice,
@@ -622,6 +636,7 @@ export class WorldViewer {
   setWorld(world: WorldInfo, keepView = false): void {
     this.clearDiscoveryFocus();
     this.depthFollow.cancel();
+    this.dropStagedDepth();
     this.applyWorld(world, keepView);
   }
 
@@ -637,9 +652,49 @@ export class WorldViewer {
     this.applyTextures();
   }
 
-  private applyWorld(world: WorldInfo, keepView: boolean, followDepth = false): void {
+  /**
+   * Loads the next cave slice out of sight, so the current one stays on screen until the
+   * terrain around the camera is ready, see `swapStagedDepth`.
+   */
+  private stageDepth(world: WorldInfo): void {
+    this.dropStagedDepth();
+    const context = sceneContext(world.dimension, world);
+    const streamer = this.createStreamer(world, context);
+    const textures = this.streamer.streamedTextures;
+    if (textures !== undefined) streamer.setTextures(textures);
+    streamer.setSelection(this.selections.get(context.dimension));
+    this.staged = { world, context, streamer, since: performance.now() };
+    this.fitViewDistance();
+  }
+
+  /** Shows the staged slice once its nearby terrain is loaded, or after a bounded wait. */
+  private swapStagedDepth(now: number): void {
+    const staged = this.staged;
+    if (staged === undefined) return;
+    staged.streamer.update(this.camera, this.renderer.domElement.height);
+    staged.streamer.animate(now);
+    const stats = staged.streamer.stats;
+    const ready = stats.loading === 0 && stats.remaining === 0;
+    if (!ready && now - staged.since < STAGED_DEPTH_WAIT_MS) return;
+    this.staged = undefined;
+    this.applyWorld(staged.world, true, true, staged.streamer);
+    this.options.onDepthChange?.(this.context);
+  }
+
+  private dropStagedDepth(): void {
+    this.staged?.streamer.dispose();
+    this.staged = undefined;
+  }
+
+  private applyWorld(
+    world: WorldInfo,
+    keepView: boolean,
+    followDepth = false,
+    loaded?: RegionStreamer,
+  ): void {
     // Validate before releasing the current terrain.
     const context = sceneContext(world.dimension, world);
+    if (loaded === undefined) this.dropStagedDepth();
     const previous = this.snapshot().view;
     this.scene.remove(this.streamer.root);
     this.streamer.dispose();
@@ -647,7 +702,7 @@ export class WorldViewer {
     this.context = context;
     if (context.mode === "caves") this.caveThickness = context.maxY - context.minY;
     this.discoveries.setWorld(world);
-    this.streamer = this.createStreamer(world);
+    this.streamer = loaded ?? this.createStreamer(world);
     this.scene.add(this.streamer.root);
     this.applyTextures();
     this.atmosphere.setDimension(world.dimension);
@@ -677,10 +732,10 @@ export class WorldViewer {
     this.fitViewDistance();
   }
 
-  private createStreamer(world: WorldInfo): RegionStreamer {
-    const caves = this.context.mode === "caves";
+  private createStreamer(world: WorldInfo, context = this.context): RegionStreamer {
+    const caves = context.mode === "caves";
     const streamer = new RegionStreamer({
-      context: this.context,
+      context,
       revision: world.revision,
       blockLight: this.blockLight[world.dimension] !== false,
       blockLightColors: this.blockLightColors[world.dimension] === true,
@@ -767,6 +822,7 @@ export class WorldViewer {
   }
 
   private reloadLighting(): void {
+    this.dropStagedDepth();
     this.scene.remove(this.streamer.root);
     this.streamer.dispose();
     this.streamer = this.createStreamer(this.world);
@@ -842,6 +898,11 @@ export class WorldViewer {
     this.applyTextures();
   }
 
+  private setStreamedTextures(textures: StreamedTextures | undefined): void {
+    this.streamer.setTextures(textures);
+    this.staged?.streamer.setTextures(textures);
+  }
+
   private setTextureState(state: TextureState): void {
     if (state === this.textureState) return;
     this.textureState = state;
@@ -854,7 +915,7 @@ export class WorldViewer {
     if (this.textureMode === "off" || revision === undefined) {
       this.textureLoad?.abort.abort();
       this.textureLoad = undefined;
-      this.streamer.setTextures(undefined);
+      this.setStreamedTextures(undefined);
       this.setTextureState(this.textureMode === "off" ? "off" : "unavailable");
       return;
     }
@@ -862,7 +923,7 @@ export class WorldViewer {
     const pbr = this.wantsPbr(revision);
     if (set?.revision === revision && set.pbrWanted === pbr) {
       const cutout = this.leafMode === "detailed";
-      this.streamer.setTextures({
+      this.setStreamedTextures({
         revision,
         materials: set.materials,
         minPixels: this.textureFade.none * this.renderer.getPixelRatio(),
@@ -871,7 +932,7 @@ export class WorldViewer {
       this.setTextureState("on");
       return;
     }
-    this.streamer.setTextures(undefined);
+    this.setStreamedTextures(undefined);
     if (this.textureLoad?.revision === revision && this.textureLoad.pbr === pbr) return;
     // A failed atlas is fetched again only when the host asks for textures again.
     if (this.failedTextureRevision === revision) {
@@ -1033,6 +1094,7 @@ export class WorldViewer {
     if (this.context.mode !== "caves") return;
     this.clearDiscoveryFocus();
     this.depthFollow.cancel();
+    this.dropStagedDepth();
     this.rig.stopMovement();
     this.setSelectionTool("off");
     this.rig.setEnabled(true);
@@ -1061,6 +1123,7 @@ export class WorldViewer {
     else this.selections.delete(this.context.dimension);
     this.selectionBox.set(selection, this.context);
     this.streamer.setSelection(this.context.mode === "caves" ? selection : undefined);
+    this.staged?.streamer.setSelection(selection);
     this.discoveries.setSelection(this.context.mode === "caves" ? selection : undefined);
     this.regionsChanged = true;
   }
@@ -1092,6 +1155,7 @@ export class WorldViewer {
     if (group.dimension !== this.context.dimension) return false;
     this.clearDiscoveryFocus();
     this.depthFollow.cancel();
+    this.dropStagedDepth();
     const controller = new AbortController();
     this.discoveryRequest = controller;
     const exposed = this.discoveries.isExposedDiscovery(group);
@@ -1271,6 +1335,7 @@ export class WorldViewer {
     this.frameListeners.clear();
     this.clearDiscoveryFocus();
     this.depthFollow.cancel();
+    this.dropStagedDepth();
     this.renderer.setAnimationLoop(null);
     this.resizeObserver.disconnect();
     this.rig.dispose();
@@ -1281,6 +1346,7 @@ export class WorldViewer {
     this.weather.dispose();
     this.textureLoad?.abort.abort();
     this.textureLoad = undefined;
+    this.dropStagedDepth();
     this.streamer.dispose();
     this.disposeTextureSet();
     this.explorationRequests.dispose();
@@ -1324,11 +1390,12 @@ export class WorldViewer {
       }
     }
     this.discoveryDetails.update(this.renderer.domElement);
+    this.swapStagedDepth(performance.now());
     this.depthFollow.update(
       this.context,
       this.rig.focus.y,
       this.rig.verticalMovement,
-      terrain.loading === 0 && terrain.remaining === 0,
+      this.staged === undefined && terrain.loading === 0 && terrain.remaining === 0,
       performance.now(),
     );
     this.discoveries.update(
@@ -1372,6 +1439,7 @@ export class WorldViewer {
       : (this.renderDistance ?? distance);
     const reach = this.mobileMode ? mobileViewDistance(requestedReach, zoom) : requestedReach;
     this.streamer.setViewDistance(reach);
+    this.staged?.streamer.setViewDistance(reach);
     this.atmosphere.viewDistance.value = reach;
     this.atmosphere.hazeDistance.value = caves
       ? 300
@@ -1469,7 +1537,9 @@ export class WorldViewer {
     this.screenWidth = width;
     this.screenHeight = height;
     // Mobile terrain uses coarser LODs independently of drawing-buffer resolution.
-    this.streamer.setDetailScale(renderDetailScale(this.renderer.getPixelRatio(), this.mobileMode));
+    const detail = renderDetailScale(this.renderer.getPixelRatio(), this.mobileMode);
+    this.streamer.setDetailScale(detail);
+    this.staged?.streamer.setDetailScale(detail);
     this.regionsChanged = true;
     this.camera.aspect = width / height;
     this.camera.focusDistance = this.rig.distance;

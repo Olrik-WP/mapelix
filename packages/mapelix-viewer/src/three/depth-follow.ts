@@ -7,7 +7,11 @@ import {
 } from "@mapelix/scene-prototype/dimensions";
 import type { VerticalMovement } from "./camera-rig";
 
-/** A single adjacent slice; never expands thickness or changes cache identity rules. */
+/**
+ * A single adjacent slice; never expands thickness or changes cache identity rules. A slice of
+ * 32 blocks or more asks for the next one a quarter of its height before its edge, so the next
+ * slice can load while the current one is still on screen. The focus then lies inside both.
+ */
 export function adjacentDepth(
   context: SceneContext,
   y: number,
@@ -15,7 +19,7 @@ export function adjacentDepth(
 ): SceneContext | undefined {
   if (context.mode !== "caves" || !direction || !Number.isFinite(y)) return;
   const thickness = context.maxY - context.minY;
-  const margin = thickness === 32 ? 4 : 0;
+  const margin = thickness >= 32 ? thickness / 4 : 0;
   if (direction > 0 ? y < context.maxY - 1 - margin : y > context.minY + margin) return;
   const limits = DIMENSIONS[context.dimension];
   const minY = Math.max(

@@ -84,12 +84,15 @@ export interface VerticalBounds {
   readonly maxY: number;
 }
 
-/** Initial cave capabilities; adapters may impose smaller streaming/cache budgets. */
+/**
+ * Cave capabilities; adapters may impose smaller streaming/cache budgets. 64-block slices
+ * are for overviews of deep caverns; the default keeps one level of caves readable.
+ */
 export const CAVE_LIMITS = {
-  thicknesses: [16, 32] as readonly number[],
+  thicknesses: [16, 32, 64] as readonly number[],
   defaultThickness: 32,
   maxLevel: 1,
-  viewDistance: 128,
+  viewDistance: 256,
   memoryBudget: 32 * 1024 * 1024,
 } as const;
 
@@ -152,7 +155,7 @@ export function sceneContext(
   if (mode === "surface" && minY !== config.minY)
     throw new RangeError("A raised minY requires caves mode");
   if (mode === "caves" && !CAVE_LIMITS.thicknesses.includes(maxY - minY)) {
-    throw new RangeError("Cave thickness must be 16 or 32 blocks");
+    throw new RangeError(`Cave thickness must be ${CAVE_LIMITS.thicknesses.join(", ")} blocks`);
   }
   return { dimension, mode, minY, maxY, ceilingY: maxY };
 }

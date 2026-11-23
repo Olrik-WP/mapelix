@@ -1,6 +1,6 @@
 import { Color, MathUtils, Vector3, type Node } from "three/webgpu";
 import { DIMENSIONS, type Dimension } from "@mapelix/scene-prototype/dimensions";
-import { caveBrightness } from "./cave-brightness";
+import { CAVE_BRIGHTNESS_DEFAULT, caveBrightness } from "./cave-brightness";
 import {
   Fn,
   cameraPosition,
@@ -117,7 +117,7 @@ export interface Daylight {
 export class Atmosphere {
   private dimension: Dimension = "overworld";
   private caves = false;
-  private caveBrightness = 1;
+  private caveBrightness = CAVE_BRIGHTNESS_DEFAULT;
   readonly environment = uniform(0);
 
   setDimension(dimension: Dimension): void {
@@ -129,7 +129,7 @@ export class Atmosphere {
     this.environment.value = enabled ? 3 : DIMENSIONS[this.dimension].storageId;
     this.caveLight.value = enabled ? CAVE_LIGHT * this.caveBrightness : 0;
   }
-  /** Scales the cave view's fill: 1 by default, 0 leaves only torches and glowing blocks. */
+  /** Scales the cave view's fill: 0.2 by default, 0 leaves only torches and glowing blocks. */
   setCaveBrightness(brightness: number): void {
     this.caveBrightness = caveBrightness(brightness);
     if (this.caves) this.caveLight.value = CAVE_LIGHT * this.caveBrightness;

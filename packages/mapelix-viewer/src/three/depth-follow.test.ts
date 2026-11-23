@@ -10,13 +10,21 @@ const flush = async () => {
 
 describe("automatic cave depth", () => {
   it("uses overlapping canonical 32-block windows, exclusive tops and dimension limits", () => {
-    expect(adjacentDepth(caves(), -22, 1)).toBeUndefined();
-    expect(adjacentDepth(caves(), -21, 1)).toEqual(caves(-32));
-    expect(adjacentDepth(caves(), -44, -1)).toEqual(caves(-64));
+    expect(adjacentDepth(caves(), -26, 1)).toBeUndefined();
+    expect(adjacentDepth(caves(), -25, 1)).toEqual(caves(-32));
+    expect(adjacentDepth(caves(), -39, -1)).toBeUndefined();
+    expect(adjacentDepth(caves(), -40, -1)).toEqual(caves(-64));
     expect(adjacentDepth(caves(-64), -64, -1)).toBeUndefined();
     expect(adjacentDepth(caves(288), 319, 1)).toBeUndefined();
     expect(adjacentDepth(sceneContext("nether", { mode: "caves" }), 0, -1)).toBeUndefined();
     expect(adjacentDepth(sceneContext(), 319, 1)).toBeUndefined();
+  });
+
+  it("asks for the next 64-block window a quarter of its height before its edge", () => {
+    expect(adjacentDepth(caves(-64, 64), -18, 1)).toBeUndefined();
+    expect(adjacentDepth(caves(-64, 64), -17, 1)).toEqual(caves(-48, 64));
+    expect(adjacentDepth(caves(0, 64), 16, -1)).toEqual(caves(-16, 64));
+    expect(adjacentDepth(caves(-64, 64), -48, -1)).toBeUndefined();
   });
 
   it("crosses adjacent 16-block windows only at the last visible block", () => {

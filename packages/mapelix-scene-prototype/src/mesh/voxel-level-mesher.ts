@@ -15,6 +15,7 @@ import {
 import { VoxelKind } from "./block-palette.js";
 import type { GeometryMode } from "../dimensions.js";
 import {
+  CAVE_SKY_DEPTH,
   COVER_DEPTH,
   KEY_COVERED,
   KEY_LAVA,
@@ -85,6 +86,13 @@ class VoxelLevelMesher {
   /** Lowest open layer of each box column. */
   private readonly lowestOpen: Int16Array;
   private readonly reached: Uint8Array;
+  /**
+   * Cave slices of surface dimensions: the sky roof layer of each box column. Air above it,
+   * or reached from it in `reached`, is open sky and shows nothing.
+   */
+  private readonly caveRoof: Int16Array | undefined;
+  /** Cave slices: highest layer per region column that owns a visible face, for `heights`. */
+  private readonly visibleTop: Int16Array;
   /** Lowest layer per region column that can own a visible face. */
   private readonly columnLow: Int16Array;
   /** Layers of wall below a column's highest block where it faces unexplored land. */
@@ -117,18 +125,33 @@ class VoxelLevelMesher {
     this.roof = new Int16Array(this.area).fill(-1);
     this.top = new Int16Array(this.area).fill(-1);
     this.findColumnTops();
+    this.visibleTop = new Int16Array(region.span * region.span).fill(-1);
+    this.caveRoof =
+      geometry !== "surface" && region.window !== undefined && region.skyRoof !== undefined
+        ? this.caveRoofs(region.skyRoof)
+        : undefined;
+    const isOpaque = (index: number) => isOpaqueKind(this.box.kind[index]!);
     const open =
       geometry === "surface"
         ? findOpenAir(
-            {
-              size: this.box.width,
-              layers: this.box.layers,
-              roof: this.roof,
-              isOpaque: (index) => isOpaqueKind(this.box.kind[index]!),
-            },
+            { size: this.box.width, layers: this.box.layers, roof: this.roof, isOpaque },
             Math.ceil(COVER_DEPTH / region.voxelSize),
           )
-        : { reached: new Uint8Array(0), lowest: new Int16Array(this.area) };
+        : this.caveRoof !== undefined
+          ? {
+              reached: findOpenAir(
+                {
+                  size: this.box.width,
+                  layers: this.box.layers,
+                  roof: this.caveRoof,
+                  isOpaque,
+                },
+                Math.ceil(CAVE_SKY_DEPTH / region.voxelSize),
+                false,
+              ).reached,
+              lowest: new Int16Array(this.area),
+            }
+          : { reached: new Uint8Array(0), lowest: new Int16Array(this.area) };
     this.reached = open.reached;
     this.lowestOpen = open.lowest;
     this.columnLow = this.findColumnRanges();
@@ -177,6 +200,17 @@ class VoxelLevelMesher {
         ? { blockLightColors: true }
         : {}),
     };
+  }
+
+  /** Sky roof layers; columns outside stored chunks count as covered, so they never open. */
+  private caveRoofs(skyRoof: Int16Array): Int16Array {
+    const { voxelSize, low, explored } = this.region;
+    const layers = this.box.layers;
+    return Int16Array.from(skyRoof, (y, column) =>
+      explored[column] === 1
+        ? Math.max(-1, Math.min(layers, Math.floor((y - low) / voxelSize)))
+        : layers,
+    );
   }
 
   private findColumnTops(): void {
@@ -248,6 +282,8 @@ class VoxelLevelMesher {
           const index = layer * this.area + column;
           if (this.writeFace(face, index, layer, column, border, keys, colors, mask)) {
             used[slice] = 1;
+            const cell = z * span + x;
+            if (layer > this.visibleTop[cell]!) this.visibleTop[cell] = layer;
           }
         }
       }
@@ -303,7 +339,8 @@ class VoxelLevelMesher {
         return false;
       }
     } else if (!this.region.explored[neighborColumn]) {
-      if (layer < this.edgeFloor(column)) return false;
+      // Cave slices draw no walls toward land that was never generated.
+      if (this.region.window !== undefined || layer < this.edgeFloor(column)) return false;
     } else if (!this.showsFace(kind, neighbor, neighborLayer, neighborColumn, border)) {
       return false;
     }
@@ -363,9 +400,10 @@ class VoxelLevelMesher {
     neighborColumn: number,
     border: boolean,
   ): boolean {
-    // Below the box is buried rock; above it is open sky.
+    // Below the box is buried rock; above it is open sky, or a cave under a higher roof.
     if (neighborLayer < 0) return this.geometry === "islands";
-    if (neighborLayer >= this.box.layers) return true;
+    if (neighborLayer >= this.box.layers)
+      return this.caveRoof === undefined || neighborLayer <= this.caveRoof[neighborColumn]!;
     const neighborKind = this.box.kind[neighbor]!;
     if (isOpaqueKind(neighborKind)) {
       return (
@@ -419,7 +457,10 @@ class VoxelLevelMesher {
     const heights = new Int16Array(span * span);
     for (let z = 0; z < span; z += 1) {
       for (let x = 0; x < span; x += 1) {
-        const top = this.columnTop((z + margin) * width + x + margin);
+        const top =
+          this.region.window === undefined
+            ? this.columnTop((z + margin) * width + x + margin)
+            : this.visibleTop[z * span + x]!;
         heights[z * span + x] = top === -1 ? EMPTY_HEIGHT : (this.baseLayer + top + 1) * voxelSize;
       }
     }
@@ -453,8 +494,18 @@ class VoxelLevelMesher {
     return (roof === -1 ? this.top[column]! : roof) - this.edgeLayers;
   }
 
-  /** A voxel is open when the sky reaches it directly or through covered air. */
+  /**
+   * A voxel is open when the sky reaches it directly or through covered air. In cave slices it
+   * is the other way round: open voxels are the air the sky does not reach, in stored chunks.
+   */
   private isOpen(index: number, layer: number, column: number): boolean {
+    if (this.region.window !== undefined) {
+      if (this.region.explored[column] !== 1) return false;
+      return (
+        this.caveRoof === undefined ||
+        (layer <= this.caveRoof[column]! && this.reached[index] !== 1)
+      );
+    }
     return this.geometry !== "surface" || layer > this.roof[column]! || this.reached[index] === 1;
   }
 }

@@ -60,14 +60,14 @@ underground containers discarded by that mesh remain excluded; the ore rule
 above is unchanged. Search all heights stays unchecked by default.
 
 Activating discoveries never changes mode. From Surface, clicking a certified
-exterior object stays in Surface; any other object opens its 16/32-block
+exterior object stays in Surface; any other object opens its 16/32/64-block
 cave window. From Caves, clicking an out-of-slice object opens another cave
 window, even for an object near the world surface. There is **no automatic return
 from Caves to Surface** in this change. Every changed window is reported through
 `onDepthChange` with `mode: "caves"`, canonical minY/maxY and the legacy ceilingY
 alias. The callback remains typed for a complete SceneContext; hosts should not
 infer the mode from height signs. A manual Surface switch stays host-owned.
-The last chosen 16/32-block thickness is retained when visiting Surface and
+The last chosen 16/32/64-block thickness is retained when visiting Surface and
 subsequently opening another discovery's cave window; a fresh viewer defaults to 32.
 
 Every marker is projected at the real representative block center, never lifted

@@ -36,6 +36,7 @@ import {
   type RegionVolume,
 } from "./region-volume.js";
 import {
+  CAVE_SKY_DEPTH,
   COVER_DEPTH,
   KEY_COVERED,
   KEY_LAVA,
@@ -104,6 +105,13 @@ class VoxelMesher {
   private reached: Uint8Array = new Uint8Array(0);
   /** Lowest open cell of each volume column, in layers above `WORLD_MIN_Y`. */
   private lowestOpen: Int16Array = new Int16Array(0);
+  /**
+   * Cave views of surface dimensions: the sky roof of each volume column, in layers above
+   * `baseY`. Air above it, or reached from it in `reached`, is open sky and shows nothing.
+   */
+  private caveRoof: Int16Array | undefined;
+  /** Cave views: highest block per region column that owns a visible face, for `heights`. */
+  private readonly visibleTop = new Int16Array(SPAN * SPAN).fill(NO_BLOCK);
   private readonly tints: Uint32Array[];
   private readonly opaque: QuadList;
   private readonly plants: QuadList;
@@ -224,6 +232,9 @@ class VoxelMesher {
       this.lowestOpen = new Int16Array(VOLUME_LAYER).fill(
         this.volume.window === undefined ? 1 - this.baseY : 1,
       );
+      if (this.volume.window !== undefined && this.volume.skyRoof !== undefined) {
+        this.findCaveSky(this.volume.skyRoof);
+      }
       return;
     }
     const open = findOpenAir(
@@ -237,6 +248,28 @@ class VoxelMesher {
     );
     this.reached = open.reached;
     this.lowestOpen = open.lowest;
+  }
+
+  /**
+   * Finds the open sky in a cave slice: the air above each column's sky roof, and the air a
+   * few blocks under overhangs beside it. Columns outside stored chunks never open.
+   */
+  private findCaveSky(skyRoof: Int16Array): void {
+    const layers = this.limitY - this.baseY;
+    const explored = this.volume.explored;
+    const roof = new Int16Array(VOLUME_LAYER);
+    for (let column = 0; column < VOLUME_LAYER; column += 1) {
+      roof[column] =
+        explored?.[column] === 0
+          ? layers
+          : Math.max(-1, Math.min(layers, skyRoof[column]! - this.baseY));
+    }
+    this.caveRoof = roof;
+    this.reached = findOpenAir(
+      { size: VOLUME_SIZE, layers, roof, isOpaque: (index) => this.isOpaque(index) },
+      CAVE_SKY_DEPTH,
+      false,
+    ).reached;
   }
 
   /**
@@ -281,7 +314,10 @@ class VoxelMesher {
           const slice = maskSlice(face, x, y - this.low, z);
           const mask = slice * layout.area + maskOffset(face, SPAN, x, y - this.low, z);
           const index = cellIndex(x + VOLUME_MARGIN, y, z + VOLUME_MARGIN, this.baseY);
-          if (this.writeFace(face, index, y, column, keys, colors, mask)) used[slice] = 1;
+          if (this.writeFace(face, index, y, column, keys, colors, mask)) {
+            used[slice] = 1;
+            this.showsBlock(x, y, z);
+          }
         }
       }
     }
@@ -340,9 +376,17 @@ class VoxelMesher {
     const neighborColumn = column + STEPS.column[face]!;
     if (boundary) {
       if (neighborY < this.baseY) return false;
-      if (neighborY < this.limitY && !this.seesThrough(this.cells[neighbor]!)) {
-        if (this.hides(this.cells[neighbor]!, face, id)) return false;
-        if (!this.isOpen(neighbor, neighborY, neighborColumn)) return false;
+      // Above the top of the world is open sky.
+      if (neighborY >= this.limitY && this.caveRoof !== undefined) return false;
+      if (neighborY < this.limitY) {
+        const through = this.seesThrough(this.cells[neighbor]!);
+        if (!through && this.hides(this.cells[neighbor]!, face, id)) return false;
+        // Cave slices also drop what shows through leaves in the open sky.
+        if (
+          (!through || this.caveRoof !== undefined) &&
+          !this.isOpen(neighbor, neighborY, neighborColumn)
+        )
+          return false;
       }
     } else if (
       !this.isOpen(index, y, column) &&
@@ -541,6 +585,7 @@ class VoxelMesher {
           const index = cellIndex(x + VOLUME_MARGIN, y, z + VOLUME_MARGIN, this.baseY);
           const id = this.cells[index]! & PALETTE_ID_MASK;
           if (palette.shape[id] !== Shape.Plant || !this.isOpen(index, y, column)) continue;
+          this.showsBlock(x, y, z);
           const box = {
             size: palette.boxSize[id]!,
             inset: palette.boxInset[id]!,
@@ -653,16 +698,27 @@ class VoxelMesher {
 
               this.minY = Math.min(this.minY, y);
               this.maxY = Math.max(this.maxY, y + 1);
+              this.showsBlock(x, y, z);
             }
         }
       }
   }
 
+  /** Records a block of region column `x`, `z` that owns a visible face. */
+  private showsBlock(x: number, y: number, z: number): void {
+    const column = z * SPAN + x;
+    if (y > this.visibleTop[column]!) this.visibleTop[column] = y;
+  }
+
+  /** Column tops; in cave slices, the highest block with a visible face. */
   private heights(): Int16Array {
     const heights = new Int16Array(SPAN * SPAN);
     for (let z = 0; z < SPAN; z += 1) {
       for (let x = 0; x < SPAN; x += 1) {
-        const top = this.columnTop((z + VOLUME_MARGIN) * VOLUME_SIZE + x + VOLUME_MARGIN);
+        const top =
+          this.volume.window === undefined
+            ? this.columnTop((z + VOLUME_MARGIN) * VOLUME_SIZE + x + VOLUME_MARGIN)
+            : this.visibleTop[z * SPAN + x]!;
         heights[z * SPAN + x] = top === NO_BLOCK ? EMPTY_HEIGHT : top + 1;
       }
     }
@@ -697,8 +753,18 @@ class VoxelMesher {
     return size === 16;
   }
 
-  /** A cell is open when the sky reaches it directly or through covered air. */
+  /**
+   * A cell is open when the sky reaches it directly or through covered air. In cave slices it
+   * is the other way round: open cells are the air the sky does not reach, in stored chunks.
+   */
   private isOpen(index: number, y: number, column: number): boolean {
+    if (this.volume.window !== undefined) {
+      if (this.volume.explored?.[column] === 0) return false;
+      return (
+        this.caveRoof === undefined ||
+        (y - this.baseY <= this.caveRoof[column]! && this.reached[index] !== 1)
+      );
+    }
     if (
       this.geometry !== "surface" ||
       y > this.volume.topSolid[column]! ||

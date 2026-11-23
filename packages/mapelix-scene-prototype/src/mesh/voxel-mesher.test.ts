@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Face, unpackQuad, type Quad, type SceneRegion } from "../format.js";
+import { EMPTY_HEIGHT, Face, unpackQuad, type Quad, type SceneRegion } from "../format.js";
 import { BlockPalette, TintCode } from "./block-palette.js";
 import { biomeTints } from "./biome-tints.js";
 import {
@@ -74,6 +74,105 @@ describe("voxel mesher", () => {
     }
     expect(biomeTints(6)[TintCode.Foliage]).not.toBe(biomeTints(2)[TintCode.Foliage]);
   });
+  describe("cave slices", () => {
+    const palette = new BlockPalette();
+    const stone = palette.idFor("minecraft:stone", {});
+    const window = { minY: 16, maxY: 48 };
+
+    /**
+     * Stone up to y 39 under open sky, with a sealed cave at y 20..22 and a notch under an
+     * overhang at y 36..37. Columns from region-local x 48 on lie outside stored chunks.
+     */
+    function caveSlice(options: { sky?: boolean; unexplored?: boolean } = {}): Quad[] {
+      const cells = new Uint16Array(VOLUME_LAYER * 64);
+      const explored = new Uint8Array(VOLUME_LAYER).fill(1);
+      for (let z = 0; z < VOLUME_SIZE; z += 1) {
+        for (let x = 0; x < VOLUME_SIZE; x += 1) {
+          if (options.unexplored === true && x >= VOLUME_MARGIN + 48) {
+            explored[z * VOLUME_SIZE + x] = 0;
+            continue;
+          }
+          for (let y = 0; y < 40; y += 1) {
+            const cave = y >= 20 && y <= 22 && x >= 26 && x < 36 && z >= 26 && z < 36;
+            // A notch into a cliff: open to the low ground at x < 20, under rock at x 20..23.
+            const notch = y >= 36 && y <= 37 && x >= 20 && x < 24 && z === 40;
+            const low = x < 20 && y >= 30;
+            if (!cave && !notch && !low) cells[cellIndex(x, y, z, 0)] = stone;
+          }
+        }
+      }
+      const skyRoof = new Int16Array(VOLUME_LAYER).fill(39);
+      for (let z = 0; z < VOLUME_SIZE; z += 1)
+        for (let x = 0; x < 20; x += 1) skyRoof[z * VOLUME_SIZE + x] = 29;
+      const volume = describeVolume(
+        {
+          originX: -VOLUME_MARGIN,
+          originZ: -VOLUME_MARGIN,
+          cells,
+          baseY: 0,
+          limitY: 64,
+          window,
+          explored,
+          ...(options.sky === false ? {} : { skyRoof }),
+        },
+        palette,
+        () => 1,
+      );
+      return quadsOf(meshRegionVolume(volume, palette, 0, 0, "interior"));
+    }
+
+    it("leaves out the ground and cliffs under the open sky", () => {
+      const quads = caveSlice();
+      expect(quads.some((quad) => quad.y === 39 && quad.face === Face.PositiveY)).toBe(false);
+      expect(quads.some((quad) => quad.y === 29 && quad.face === Face.PositiveY)).toBe(false);
+      // The notch under the overhang opens onto the low ground, so the sky reaches it.
+      expect(quads.some((quad) => quad.y === 36 || quad.y === 37)).toBe(false);
+      // Only the sealed cave shows: its floor, its ceiling, and its walls.
+      expect(quads.find((quad) => quad.face === Face.PositiveY)).toMatchObject({ y: 19 });
+      expect(quads.find((quad) => quad.face === Face.NegativeY)).toMatchObject({ y: 23 });
+      expect(quads.every((quad) => quad.y >= 19 && quad.y <= 23)).toBe(true);
+    });
+
+    it("keeps open ground without a sky roof, as in the Nether", () => {
+      const quads = caveSlice({ sky: false });
+      expect(quads.some((quad) => quad.y === 39 && quad.face === Face.PositiveY)).toBe(true);
+    });
+
+    it("draws no walls toward chunks that were never generated", () => {
+      const quads = caveSlice({ sky: false, unexplored: true });
+      expect(quads.some((quad) => quad.face === Face.PositiveX && quad.x === 47)).toBe(false);
+      expect(quads.some((quad) => quad.y === 39 && quad.face === Face.PositiveY)).toBe(true);
+    });
+
+    it("reports the highest visible block as the column height", () => {
+      const volumeHeights = (sky: boolean) => {
+        const cells = new Uint16Array(VOLUME_LAYER * 64);
+        for (let index = 0; index < VOLUME_LAYER * 40; index += 1) cells[index] = stone;
+        for (let y = 20; y <= 22; y += 1) cells[cellIndex(30, y, 30, 0)] = 0;
+        const volume = describeVolume(
+          {
+            originX: -VOLUME_MARGIN,
+            originZ: -VOLUME_MARGIN,
+            cells,
+            baseY: 0,
+            limitY: 64,
+            window,
+            ...(sky ? { skyRoof: new Int16Array(VOLUME_LAYER).fill(39) } : {}),
+          },
+          palette,
+          () => 1,
+        );
+        return meshRegionVolume(volume, palette, 0, 0, "interior").heights;
+      };
+      const heights = volumeHeights(true);
+      const column = (30 - VOLUME_MARGIN) * 64 + 30 - VOLUME_MARGIN;
+      // The cave's ceiling block, not the hidden ground.
+      expect(heights[column]).toBe(24);
+      expect(heights[0]).toBe(EMPTY_HEIGHT);
+      expect(volumeHeights(false)[0]).toBe(40);
+    });
+  });
+
   it("merges a flat floor into one top face and hides the rest", () => {
     const quads = mesh((place) => floor(place));
 

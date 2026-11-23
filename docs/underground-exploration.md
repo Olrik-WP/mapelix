@@ -12,7 +12,7 @@ retaining that dimension's selection for a later return to caves.
 
 The 3D box has Move and Resize tools. X/Z movement and resizing preview locally;
 the Y handle proposes a section-aligned depth change when released. Height uses
-the existing 16/32-block slice control. Orbit, keyboard and wheel camera input are
+the existing 16/32/64-block slice control. Orbit, keyboard and wheel camera input are
 suspended during handle drags. Picking/collisions exclude hidden terrain.
 
 Only intersecting reusable regions are requested. All terrain material families,
