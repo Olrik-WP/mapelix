@@ -137,8 +137,10 @@ the complete selected snapshot without rendering or writing files, and prints a 
   out to the horizon. Drawn with three.js on WebGPU, with a WebGL 2 fallback.
 - **Dimensions:** Overworld, Nether (with an adjustable ceiling cut) and End; changing dimension in
   3D reloads the world at the same place.
-- **Caves:** 16 or 32-block slices, including enclosed negative-Y caverns, with automatic depth
-  that follows the camera and a selectable exploration area
+- **Caves:** 16, 32 or 64-block slices that show only enclosed spaces (caverns, tunnels, mines,
+  the inside of buildings), not the ground under the open sky, including negative-Y caverns.
+  Automatic depth follows the camera, an exploration area can be selected, and a headlamp lights
+  the walls with an adjustable "Cave light" so torches and glowing ores stand out
   ([underground rendering](docs/underground-rendering.md),
   [cave navigation](docs/cave-navigation.md)).
 - **Discoveries:** ores (exposed or fully buried), spawners, containers, vaults, amethyst, sculk,
@@ -146,7 +148,8 @@ the complete selected snapshot without rendering or writing files, and prints a 
   when switched on ([discovery labels](docs/discovery-labels.md),
   [discovery navigation](docs/discovery-navigation.md)).
 - **Sky:** clouds, rain, thunderstorm and time of day on the Overworld surface
-  ([clouds and weather](docs/clouds-weather.md)).
+  ([clouds and weather](docs/clouds-weather.md)). The sun casts shadows, sharp enough up close
+  for fences and bars.
 - **Block light:** torches, lanterns, lava and other vanilla sources illuminate nearby blocks
   with or without textures, on the Surface and in Caves ([block light](docs/block-lighting.md)).
 - **Projection:** isometric or perspective; the switch from the map starts isometric, looking
@@ -177,8 +180,12 @@ the complete selected snapshot without rendering or writing files, and prints a 
   for pixel. **Detailed leaves** cut out leaf holes, at about twice the geometry in forests.
 - **PBR materials:** packs with texture sets (normal or height maps, metalness, emissive and
   roughness) can bend each textured block with its normal map and give it its materials;
-  emissive texels such as ores glow in the dark. Off by default: the `pbr` option,
-  `setPbr("on")`, or the "PBR materials" switch ([details](docs/texture-stack.md#pbr-materials-texture-sets)).
+  emissive texels such as ores glow in the dark and underground, torches bring out the relief,
+  and glossy blocks reflect the sky. Off by default: the `pbr` option, `setPbr("on")`, or the
+  "PBR materials" switch ([details](docs/texture-stack.md#pbr-materials-texture-sets)).
+- **High-resolution packs:** `maxAtlasSide: 4096` keeps a full 64-pixel pack at 64 pixels on
+  desktop GPUs (about 240 MiB with PBR); mobile mode loads it at 32 pixels
+  ([details](docs/texture-stack.md#high-resolution-packs)).
 - Mapelix never ships or downloads a pack itself; the host gives the packs. The demo can
   download Mojang's vanilla pack (Bedrock samples on GitHub) when asked to.
 
